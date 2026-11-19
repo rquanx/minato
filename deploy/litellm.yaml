@@ -1,0 +1,12 @@
+model_list: []
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
+  store_model_in_db: true
+  store_prompts_in_spend_logs: false
+  forward_client_headers_to_llm_api: true
+router_settings:
+  num_retries: 0
+litellm_settings:
+  set_verbose: false
+  turn_off_message_logging: true
+  callbacks: [minato_callbacks.logger]

@@ -1,0 +1,40 @@
+services:
+  database:
+    image: postgres:17-alpine
+    pull_policy: never
+    environment:
+      POSTGRES_DB: fixture
+      POSTGRES_USER: fixture
+      POSTGRES_PASSWORD: fixture-only
+    tmpfs: [/var/lib/postgresql/data]
+    healthcheck:
+      test: [CMD, pg_isready, -U, fixture, -d, fixture]
+      interval: 2s
+      timeout: 2s
+      retries: 10
+    networks: [fixture]
+  fixture:
+    image: ghcr.io/berriai/litellm:v1.85.0@sha256:2e8517e2bed423c50ab7e40fb1ac0a9cbe62a764e9d65161d871fb6a9bf75a2d
+    pull_policy: never
+    entrypoint: [python, /fixture/mock_upstreams.py]
+    command: [--host, 0.0.0.0]
+    volumes:
+      - .:/fixture:ro
+    networks: [fixture]
+  proxy:
+    image: ghcr.io/berriai/litellm:v1.85.0@sha256:2e8517e2bed423c50ab7e40fb1ac0a9cbe62a764e9d65161d871fb6a9bf75a2d
+    pull_policy: never
+    command: [--config, /fixture/litellm.yaml, --host, 0.0.0.0, --port, '4000']
+    environment:
+      LITELLM_LOCAL_MODEL_COST_MAP: 'True'
+      DATABASE_URL: postgresql://fixture:fixture-only@database:5432/fixture
+      PYTHONDONTWRITEBYTECODE: '1'
+    depends_on:
+      database:
+        condition: service_healthy
+    volumes:
+      - .:/fixture:ro
+    networks: [fixture]
+networks:
+  fixture:
+    internal: true

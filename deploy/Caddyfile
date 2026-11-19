@@ -1,0 +1,14 @@
+:8080 {
+	handle /internal/* {
+		respond 404
+	}
+	@inference path /v1 /v1/* /health/ready
+	handle @inference {
+		reverse_proxy ingress:4200 {
+			flush_interval -1
+		}
+	}
+	handle {
+		reverse_proxy control:4100
+	}
+}

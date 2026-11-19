@@ -1,0 +1,25 @@
+model_list:
+  - model_name: route-v1
+    litellm_params:
+      model: openai/Model A
+      api_base: http://fixture:18765/primary/v1
+      api_key: fixture-primary
+    model_info:
+      supported_endpoints: [/v1/responses]
+  - model_name: backup-v1
+    litellm_params:
+      model: openai/chat_completions/model-b
+      api_base: http://fixture:18765/backup/v1
+      api_key: fixture-backup
+router_settings:
+  num_retries: 0
+  timeout: 10
+  disable_cooldowns: true
+  fallbacks:
+    - route-v1: [backup-v1]
+litellm_settings:
+  callbacks: [fixture_callbacks.logger]
+general_settings:
+  master_key: sk-minato-fixture
+  store_model_in_db: true
+  forward_client_headers_to_llm_api: true
