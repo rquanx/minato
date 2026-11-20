@@ -200,7 +200,7 @@ try {
   assert.equal(replayResult.replayOf, requestId);
   assert.equal(replayResult.output.actualModel, "Model A");
   const source = await control("POST", "/sources", { slug: project, kind: "openai",
-    directoryUrl: "http://127.0.0.1:18765/fixture/calls", apiBase: "http://fixture:18765/backup/v1",
+    directoryUrl: "http://127.0.0.1:18765/fixture/calls", apiBase: fixtureBase + "/backup/v1",
     credentialEnv: "MINATO_UPSTREAM_FIXTURE", defaultEndpoint: "chat-completions", enabled: true }, 201);
   await control("PUT", `/sources/${source.id}/models/model-b`, {});
   const chosen = await admin.inject({ method: "POST", url: `/admin/v1/environments/${prod.id}/tests`,
@@ -213,7 +213,7 @@ try {
   assert.equal(chosenResult.output.actualModel, "model-b");
   assert.equal(chosenResult.output.response.usage.total_tokens, 12);
   await control("PATCH", `/sources/${source.id}`, {
-    kind: "openai", directoryUrl: "http://127.0.0.1:18765/fixture/calls", apiBase: "http://fixture:18765/backup/v1",
+    kind: "openai", directoryUrl: "http://127.0.0.1:18765/fixture/calls", apiBase: fixtureBase + "/backup/v1",
     credentialEnv: "MINATO_UPSTREAM_FIXTURE", defaultEndpoint: "chat-completions", enabled: false, expectedRevision: 1 });
   await db`update call_content set expires_at = now() - interval '1 second' where request_id = ${requestId}`;
   await cleanExpired(db);
