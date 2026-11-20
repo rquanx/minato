@@ -62,9 +62,9 @@ export function createLiteLlm(env = process.env) {
       await response.body?.cancel();
       if (!(await listIds()).has(group)) throw new Error(response.ok ? "proxy_model_readback_failed" : "proxy_model_create_failed");
     },
-    async publish(alias: string, version: string, deployments: Candidate[]) {
+    async publishRoute(featureId: string, version: string, deployments: Candidate[]) {
       for (const [index, deployment] of deployments.entries()) {
-        await this.stage(modelGroup(alias, version, index), deployment);
+        await this.stage(modelGroup(featureId, version, index), deployment);
       }
     },
   };

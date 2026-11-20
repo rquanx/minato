@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { ApiError, endpoint } from "../../packages/contracts";
 import { candidate, liteLlmConfig, modelGroup } from "../../packages/litellm/client";
-import { runtimeConfig } from "../../packages/runtime/client";
+import { createRuntime, runtimeConfig, runtimeRouteKey } from "../../packages/runtime/client";
 
 const common = ["model", "stream", "temperature", "top_p", "tools", "tool_choice", "parallel_tool_calls", "stop"];
 const allowed = {
@@ -127,6 +127,7 @@ export function createInference(env = process.env) {
 
 function createRuntimeInference(env: NodeJS.ProcessEnv) {
   const { base, headers } = runtimeConfig(env);
+  const runtime = createRuntime(env);
   return async function infer(options: {
     snapshot: Snapshot;
     body: ReturnType<typeof validateInput>;
@@ -143,17 +144,24 @@ function createRuntimeInference(env: NodeJS.ProcessEnv) {
     const id = crypto.randomUUID();
     const started = performance.now();
     const first = snapshot.candidates[0];
-    const modelId = options.groupOverride ?? snapshot.alias;
+    const modelId = options.groupOverride ?? runtimeRouteKey(snapshot.id, snapshot.version);
     options.onAttemptStart?.({ id, sourceId: first.sourceId, modelId: first.modelId });
     const attemptHeaders: Record<string, string> = { ...headers, "content-type": "application/json", "x-minato-request-id": id };
     if (options.sessionHeader) attemptHeaders["x-opencode-session"] = options.sessionHeader;
     const path = snapshot.requirements.endpoint === "responses" ? "/v1/responses" : "/v1/chat/completions";
+    const signal = AbortSignal.any([options.signal, AbortSignal.timeout(120_000)]);
+    const send = () => fetch(new URL(path, base), {
+      method: "POST", headers: attemptHeaders, redirect: "error", signal,
+      body: JSON.stringify({ ...body, model: modelId }),
+    });
     let response: Response;
     try {
-      response = await fetch(new URL(path, base), {
-        method: "POST", headers: attemptHeaders, redirect: "error", signal: AbortSignal.any([options.signal, AbortSignal.timeout(120_000)]),
-        body: JSON.stringify({ ...body, model: modelId }),
-      });
+      response = await send();
+      if (response.status === 404 && response.headers.get("x-minato-runtime-route-missing") === "1") {
+        await response.body?.cancel();
+        await runtime.publish(modelId, options.groupOverride ? "1" : snapshot.version, snapshot.candidates, signal);
+        response = await send();
+      }
     } catch {
       options.onAttempt?.({ id, sourceId: first.sourceId, modelId: first.modelId, status: 504, durationMs: performance.now() - started, retryable: !options.signal.aborted });
       throw new ApiError(504, "upstream_error", "Runtime request could not be completed");
