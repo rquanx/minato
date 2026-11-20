@@ -4,6 +4,7 @@ import { createControl } from "../apps/control/server";
 import { createIngress } from "../apps/ingress/server";
 import { connectDatabase } from "../packages/db/client";
 import { createLiteLlm } from "../packages/litellm/client";
+import { createRuntime } from "../packages/runtime/client";
 import { publishNextRoute } from "../apps/worker/routes";
 import { createTestRunner } from "../apps/worker/tests";
 import { cleanExpired } from "../apps/worker/tests";
@@ -12,11 +13,14 @@ const config = { ...process.env, MINATO_ADMIN_PASSWORD: "local-smoke-password",
   MINATO_KEY_PEPPER: "minato-smoke-key-pepper-keep-only-in-test", MINATO_COOKIE_SECURE: "false",
   MINATO_AUDIT_SECRET: "minato-smoke-audit-secret-keep-only-in-test",
   MINATO_CALLBACK_SECRET: "minato-smoke-callback-secret-for-testing",
-  LITELLM_MASTER_KEY: "sk-minato-fixture", MINATO_UPSTREAM_FIXTURE: "fixture-only" };
+  LITELLM_MASTER_KEY: "sk-minato-fixture", MINATO_UPSTREAM_FIXTURE: "fixture-only",
+  MINATO_DATA_PLANE: process.env.MINATO_DATA_PLANE ?? "litellm",
+  MINATO_RUNTIME_BASE_URL: process.env.MINATO_RUNTIME_BASE_URL ?? "http://127.0.0.1:14300",
+  MINATO_RUNTIME_TOKEN: process.env.MINATO_RUNTIME_TOKEN ?? "runtime-smoke-token" };
 const db = connectDatabase();
 const admin = createControl(connectDatabase(), config);
 const ingress = createIngress(connectDatabase(), config);
-const proxy = createLiteLlm(config);
+const proxy = config.MINATO_DATA_PLANE === "runtime" ? createRuntime(config) : createLiteLlm(config);
 const project = "smoke-" + crypto.randomUUID().slice(0, 8);
 const fixture = "http://127.0.0.1:18765";
 
@@ -61,9 +65,10 @@ try {
     expectedRevision: 0, enabled: true, retentionDays: 7, contentLimit: 262144, redactKeys: [],
   });
   const routing = `/features/${feature.id}/routing`;
+  const fixtureBase = process.env.MINATO_SMOKE_API_BASE ?? "http://fixture:18765";
   const candidates = [
-    { sourceId: "fixture", modelId: "Model A", apiBase: "http://fixture:18765/primary/v1", credentialEnv: "MINATO_UPSTREAM_FIXTURE", upstreamEndpoint: "responses" },
-    { sourceId: "opencode-fixture", modelId: "model-b", apiBase: "http://fixture:18765/backup/v1", credentialEnv: "MINATO_UPSTREAM_FIXTURE", upstreamEndpoint: "chat-completions" },
+    { sourceId: "fixture", modelId: "Model A", apiBase: fixtureBase + "/primary/v1", credentialEnv: "MINATO_UPSTREAM_FIXTURE", upstreamEndpoint: "responses" },
+    { sourceId: "opencode-fixture", modelId: "model-b", apiBase: fixtureBase + "/backup/v1", credentialEnv: "MINATO_UPSTREAM_FIXTURE", upstreamEndpoint: "chat-completions" },
   ];
   await control("PUT", routing, { expectedRevision: 0, candidates });
   const queued = await control("POST", routing + "/publish", { expectedRevision: 1 }, 202);
@@ -71,8 +76,9 @@ try {
   assert.equal((await control("GET", routing + "/versions"))[0].state, "active");
   assert.equal((await ingress.inject({ method: "POST", url: "/v1/responses", headers: { authorization: `Bearer ${other.key}` },
     payload: { model: alias, input: "Wrong environment" } })).statusCode, 404);
+  const internalModel = config.MINATO_DATA_PLANE === "runtime" ? `minato-${feature.id}-1` : `minato-${feature.id}-1-0`;
   assert.equal((await ingress.inject({ method: "POST", url: "/v1/responses", headers: authorization,
-    payload: { model: `minato-${feature.id}-1-0`, input: "Internal group" } })).statusCode, 404);
+    payload: { model: internalModel, input: "Internal group" } })).statusCode, 404);
   const predict = (stream = false) => ingress.inject({ method: "POST", url: "/v1/responses",
     headers: { ...authorization, "x-opencode-session": "smoke-session" },
     payload: { model: alias, input: "Synthetic test input", stream } });
