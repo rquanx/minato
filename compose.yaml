@@ -4,7 +4,10 @@ x-minato: &minato
   env_file: ${MINATO_ENV_FILE:-.env}
   environment:
     MINATO_HOST: 0.0.0.0
-    LITELLM_BASE_URL: http://litellm:4000
+    MINATO_CALLBACK_HOST: 0.0.0.0
+    MINATO_DATA_PLANE: runtime
+    MINATO_RUNTIME_BASE_URL: http://runtime:4300
+    MINATO_RUNTIME_TOKEN: ${MINATO_RUNTIME_TOKEN:?Set MINATO_RUNTIME_TOKEN in .env}
   depends_on:
     migrate:
       condition: service_completed_successfully
@@ -29,35 +32,18 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-  control:
+  minato:
     <<: *minato
-    command: ["bun", "run", "start"]
-  ingress:
-    <<: *minato
-    command: ["bun", "run", "start:ingress"]
-  worker:
-    <<: *minato
-    command: ["bun", "run", "start:worker"]
-  litellm:
-    image: ghcr.io/berriai/litellm:v1.85.0@sha256:2e8517e2bed423c50ab7e40fb1ac0a9cbe62a764e9d65161d871fb6a9bf75a2d
-    command: ["--config", "/fixture/litellm.yaml", "--host", "0.0.0.0", "--port", "4000"]
-    environment:
-      DATABASE_URL: ${LITELLM_DATABASE_URL:?Set LITELLM_DATABASE_URL in .env}
-      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:?Set LITELLM_MASTER_KEY in .env}
-      MINATO_CALLBACK_SECRET: ${MINATO_CALLBACK_SECRET:?Set MINATO_CALLBACK_SECRET in .env}
-      LITELLM_LOCAL_MODEL_COST_MAP: "True"
-      PYTHONDONTWRITEBYTECODE: "1"
-    volumes:
-      - ./deploy:/fixture:ro
-    depends_on:
-      postgres:
-        condition: service_healthy
-  gateway:
-    image: caddy:2.10.2-alpine
     ports:
-      - "127.0.0.1:${MINATO_PUBLIC_PORT:-8088}:8080"
-    volumes:
-      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
-    depends_on: [control, ingress]
+      - "127.0.0.1:${MINATO_PUBLIC_PORT:-8088}:4100"
+  runtime:
+    image: minato-runtime:local
+    build:
+      context: ../minato-runtime
+    env_file: ${MINATO_ENV_FILE:-.env}
+    environment:
+      MINATO_RUNTIME_PORT: "4300"
+      MINATO_RUNTIME_TOKEN: ${MINATO_RUNTIME_TOKEN:?Set MINATO_RUNTIME_TOKEN in .env}
+    restart: unless-stopped
 volumes:
   pgdata:

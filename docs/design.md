@@ -1,27 +1,25 @@
 # 技术设计
 
-本页概述产品架构。接口与运行时边界以详细设计为准。首版由 Minato 入口鉴权并绑定已发布路由，按错误类型决定是否切到下一候选，LiteLLM 执行每次上游调用和协议转换。 [详细设计](implementation/index.md)
+本页概述产品架构。接口与运行时边界以详细设计为准。Minato 负责入口鉴权、路由版本和审计，低内存 Go Runtime 执行上游调用、协议转换和回退。LiteLLM 仅作为兼容数据平面的可选实现。 [详细设计](implementation/index.md)
 
 ## 架构与选型
 
-Minato 自研管理 API、目录同步和后台界面，以固定版本的官方 LiteLLM Proxy 镜像处理推理请求。Minato 通过 LiteLLM 的管理 API 配置模型组和虚拟 Key，通过网关的用量记录或回调接收调用数据。两者独立升级。LiteLLM 的 API 和版本能力由本地兼容测试确认。 [LiteLLM 模型管理](https://docs.litellm.ai/docs/proxy/model_management) · [虚拟 Key](https://docs.litellm.ai/docs/proxy/virtual_keys) · [回退](https://docs.litellm.ai/docs/proxy/reliability)
+Minato 在一个进程中运行控制台、管理 API、推理入口和后台任务。Go Runtime 使用内存路由快照，负责协议转换、访问上游和有界回退。Minato 通过内部路由发布接口推送版本。LiteLLM 可以作为迁移期兼容数据平面运行。 [LiteLLM 模型管理](https://docs.litellm.ai/docs/proxy/model_management)
 
 ```mermaid
 flowchart LR
-    App[业务服务] -->|注册功能点| Manager[Minato 管理服务]
-    Admin[管理员] --> Manager
-    Manager -->|保存项目、目录和路由版本| DB[(Postgres)]
-    Manager -->|发布路由与虚拟 Key| Proxy[LiteLLM Proxy]
-    App -->|环境 Key 与固定模型别名| Ingress[Minato 推理入口]
-    Ingress -->|已发布的内部模型组| Proxy
+    App[业务服务] -->|注册功能点与推理| Minato[Minato]
+    Admin[管理员] --> Minato
+    Minato -->|配置、任务和调用记录| DB[(Postgres)]
+    Minato -->|发布路由与推理| Proxy[Go Runtime]
     Proxy -->|首选| Primary[首选模型来源]
     Proxy -->|备用| Backup[备用模型来源]
-    Manager -.->|同步模型目录| Primary
-    Manager -.->|同步模型目录| Backup
-    Proxy -->|用量事件| DB
+    Minato -.->|同步模型目录| Primary
+    Minato -.->|同步模型目录| Backup
+    Proxy -.->|响应元数据与尝试日志| Minato
 ```
 
-推理入口固定本次请求所用的路由版本，依序把可重试的失败切到下一个 LiteLLM 模型组。管理服务负责发布和后台任务，推理入口可以独立运行。首版可共用一个 Postgres 实例，Minato 与 LiteLLM 各用自己的数据库和账号。Minato 通过受支持的接口读取网关状态和用量。
+推理入口固定本次请求所用的路由版本，Runtime 依序把可重试的失败切到下一个候选。目录同步、发布、重算、回放和清理各自串行处理任务，彼此独立运行。Runtime 重启后，Minato 会在请求缺少路由时按当前版本重新发布。默认部署共用一个 Postgres 实例，Runtime 不需要独立数据库。Minato 进程重启时，控制台和推理会一起短暂停顿。
 
 ## 注册与调用 API 草案
 
@@ -71,9 +69,9 @@ Content-Type: application/json
 ## 路由和发布
 
 1. 管理服务按「管理员首选或业务预设 → 功能点备用列表 → 满足能力约束的默认模型池」生成候选顺序。默认池由管理员选定。若无兼容模型，网关返回可诊断的错误。
-2. Minato 对配置允许的连接失败、限流、上游临时故障或明确的模型不可用错误执行有界回退。每次尝试调用一个 LiteLLM 模型组，并显式禁用 Proxy 内置回退。请求参数错误直接返回。同一请求在写出第一个流式数据后发生错误时结束该流。
+2. Runtime 对配置允许的连接失败、限流、上游临时故障或明确的模型不可用错误执行有界回退。每次请求使用一个版本化 Runtime 路由键。请求参数错误直接返回。同一请求在写出第一个流式数据后发生错误时结束该流。
 3. 管理服务保存期望版本和当前生效版本。先准备并读回验证完整的候选模型组，再事务性切换功能点的生效版本。准备失败时沿用此前生效的版本。
-4. 目录同步与推理解耦。目录过期或 Minato 管理服务重启时，LiteLLM 继续使用最近一次成功发布的配置。为路由发布保留历史，供管理员回滚。
+4. 目录同步与推理解耦。目录过期或 Minato 管理服务重启时，Runtime 继续使用内存中的最近一次路由配置。Runtime 丢失路由后由 Minato 按当前生效版本懒加载恢复。为路由发布保留历史，供管理员回滚。
 
 使用固定版本的 LiteLLM 验证原生 Responses 转发到 CPA。备用来源仅提供 Chat Completions 时，验证网关能否转换请求和响应、转发来源所需的会话头（例如 `x-opencode-session`），并保留 JSON 输出与 usage。已有业务迁移时，先验证网关回退，再移除对应的业务侧重试和回退。 [LiteLLM Responses API](https://docs.litellm.ai/docs/response_api)
 

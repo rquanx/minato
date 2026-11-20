@@ -2,31 +2,25 @@
 
 ## Install
 
-1. Copy `.env.compose.example` to `.env`. Set a PostgreSQL password and match it in both database URLs. URL-encode reserved characters in the URLs. Set a 12-character or longer administrator password, plus independent random secrets of at least 32 characters for the key pepper, audit encryption and callbacks. Choose a stable LiteLLM master key starting with `sk-`.
-2. Run `docker compose up -d --build`. Check `docker compose ps` and open `http://localhost:8088`. The migration container exits after applying pending migrations. The LiteLLM container runs its schema migration on startup. The gateway returns ready at `/health/ready` once Minato and LiteLLM are available.
-3. Minato serves the console and APIs on the loopback listener. Postgres, LiteLLM and Minato's usage callback listener are reachable on the Compose network. For remote access, use a private connection or a TLS reverse proxy. Set `MINATO_PUBLIC_ORIGIN` to the exact public origin and use `MINATO_COOKIE_SECURE=true` with HTTPS.
+1. Copy `.env.compose.example` to `.env`. Set a PostgreSQL password and match it in the database URL. URL-encode reserved characters in the URL. Set a 12-character or longer administrator password, independent random secrets of at least 32 characters for the key pepper, audit encryption and callbacks, and a Runtime token.
+2. Run `docker compose up -d --build`. Check `docker compose ps` and open `http://localhost:8088`. The migration container exits after applying pending migrations. The gateway returns ready at `/health/ready` once Minato, Runtime and Postgres are available.
+3. Minato serves the console and APIs on the loopback listener. Postgres, Runtime and Minato's callback listener are reachable on the Compose network. For remote access, use a private connection or a TLS reverse proxy. Set `MINATO_PUBLIC_ORIGIN` to the exact public origin and use `MINATO_COOKIE_SECURE=true` with HTTPS.
 
-To use the bundled Caddy reverse proxy, add `-f compose.yaml -f compose.caddy.yaml` to your Compose commands. Caddy takes over the loopback port and forwards requests to Minato. Pass any LiteLLM admin override in the same command when that port should also be published.
+To use the bundled Caddy reverse proxy, add `-f compose.yaml -f compose.caddy.yaml` to your Compose commands. Caddy takes over the loopback port and forwards requests to Minato.
 
 ## Go Runtime data plane
 
-The default deployment uses LiteLLM as the data plane. To use the low-memory Go Runtime, set `MINATO_RUNTIME_TOKEN` in `.env` and start the runtime override.
-
-```bash
-docker compose -f compose.yaml -f compose.runtime.yaml up -d --build
-```
-
-In this mode Minato publishes complete route snapshots to Runtime. Runtime performs upstream fallback and serves the OpenAI-compatible inference endpoints. The runtime image is built from the sibling `minato-runtime` checkout referenced by `compose.runtime.yaml`, so clone both repositories next to each other before building.
+The default deployment uses the low-memory Go Runtime. Minato publishes complete route snapshots to Runtime. Runtime performs upstream fallback and serves the OpenAI-compatible inference endpoints. The runtime image is built from the sibling `minato-runtime` checkout referenced by `compose.yaml`, so clone both repositories next to each other before building.
 
 ## LiteLLM admin UI
 
-Set `LITELLM_UI_PASSWORD` to a separate administrator password in your Compose environment. `LITELLM_UI_USERNAME` defaults to `admin` and `LITELLM_UI_PORT` defaults to `18089`. Enable the loopback listener by applying the override to the same Compose project.
+LiteLLM remains available as a migration compatibility data plane. Set `LITELLM_MASTER_KEY` and `LITELLM_UI_PASSWORD` in your Compose environment. `LITELLM_UI_USERNAME` defaults to `admin` and `LITELLM_UI_PORT` defaults to `18089`. Enable the compatibility stack and loopback listener by applying both overrides to the same Compose project.
 
 ```bash
-docker compose -f compose.yaml -f compose.litellm-admin.yaml up -d --no-deps litellm
+docker compose -f compose.yaml -f compose.litellm.yaml -f compose.litellm-admin.yaml up -d --build
 ```
 
-Open `http://127.0.0.1:18089/ui/` and sign in with those credentials. The loopback listener serves the LiteLLM Proxy, including the UI and the API routes the UI uses. Minato manages the model groups associated with its published routes.
+Open `http://127.0.0.1:18089/ui/` and sign in with those credentials. The loopback listener serves the LiteLLM Proxy, including the UI and the API routes the UI uses. Set `MINATO_DATA_PLANE=litellm` through the compatibility override when Minato should use it for inference.
 
 ## Connect an application
 
@@ -59,9 +53,9 @@ console.log(response.output_text);
 
 ## Upgrade and recover
 
-Keep a copy of the deployment configuration and secret values. The key pepper is required to validate previously issued keys. The audit secret is required to decrypt saved content. The LiteLLM master key is required to read previously staged model definitions. Store those secrets separately from database archives.
+Keep a copy of the deployment configuration and secret values. The key pepper is required to validate previously issued keys. The audit secret is required to decrypt saved content. The Runtime token and upstream credential references are required to restore the data plane. Store those secrets separately from database archives.
 
-Create a database archive before updating the image or schema. The single PostgreSQL database includes both the Minato and LiteLLM schemas in the default Compose deployment.
+Create a database archive before updating the image or schema. The PostgreSQL database stores Minato control, audit and usage data.
 
 ```bash
 docker compose exec -T postgres pg_dump -U minato -Fc minato > minato.dump
@@ -70,7 +64,7 @@ docker compose up -d --build --remove-orphans
 
 The first command uses byte-preserving redirection in Bash. On other shells, write the archive inside the container with `pg_dump -f /tmp/minato.dump` and use `docker compose cp`.
 
-When upgrading from separate Minato control, ingress and worker containers, run the upgrade under the existing Compose project. `--remove-orphans` removes the old Minato containers and releases the old gateway port. The existing Postgres volume holds the application and LiteLLM data. Minato serves the console and inference from one process after the upgrade, so restarting it briefly interrupts both.
+When upgrading from separate Minato control, ingress and worker containers, run the upgrade under the existing Compose project. `--remove-orphans` removes the old Minato containers and releases the old gateway port. Minato serves the console and inference from one process after the upgrade, so restarting it briefly interrupts both. LiteLLM schema data remains in Postgres when the compatibility stack is enabled.
 
 To rehearse recovery, use a separate Compose project and an unused gateway port. Restore the archive into an empty database before starting either migration process, then set both database URLs to the restored database and preserve the schema query parameter for LiteLLM. Validate that the environment key still authenticates, active routing can be read and the audit policy matches the original deployment. Restore migrations and application versions together if an upgrade requires rolling back an incompatible schema.
 

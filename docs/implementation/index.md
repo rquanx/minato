@@ -1,6 +1,6 @@
 # Minato 详细设计
 
-Minato 把上游模型变化与业务发布解耦。业务使用稳定的功能点别名，管理员负责模型策略。Minato 选择候选并执行回退，LiteLLM 转换协议并访问上游。调用审计与回放用于定位异常和验证换模。
+Minato 把上游模型变化与业务发布解耦。业务使用稳定的功能点别名，管理员负责模型策略。Minato 选择候选，Go Runtime 转换协议并执行回退。调用审计与回放用于定位异常和验证换模。
 
 | 文档 | 内容 |
 | --- | --- |
@@ -13,10 +13,9 @@ Minato 把上游模型变化与业务发布解耦。业务使用稳定的功能�
 
 | 组件 | 技术与职责 |
 | --- | --- |
-| Minato 管理服务 | TypeScript + Fastify，提供管理和注册 API。后台进程运行目录同步、发布、采集写入和回放任务 |
-| Minato 推理入口 | 同一 TypeScript 项目的独立进程，负责环境 Key 鉴权、请求 ID、解析别名、流式透传与内容采集 |
-| LiteLLM Proxy | 使用固定版本的官方镜像，部署在私有网络，负责单次上游调用和协议转换。Minato 推理入口按错误类型执行有序回退 |
-| Postgres | 控制配置、审计元数据、内容、任务和用量。Minato 与 LiteLLM 设置独立数据库角色和数据边界 |
+| Minato | TypeScript + Fastify，单进程提供管理、注册、推理和控制台。后台任务在单独的执行循环中运行 |
+| Go Runtime | 独立的低内存 Go 服务，接收版本化路由快照，负责单次上游调用、协议转换和有序回退 |
+| Postgres | 保存控制配置、审计元数据、内容、任务和用量。Minato 和 LiteLLM 在默认部署中各用独立 schema |
 | 管理界面 | React + Vite，随管理服务同源提供，使用 Lucide 图标 |
 
 首版提供文本 Chat Completions 和 Responses、单次测试和回放。批量回放、评测集、自动评分和发布门禁留给下一阶段。所有示例使用虚构的项目、模型和来源。
@@ -25,21 +24,24 @@ Minato 把上游模型变化与业务发布解耦。业务使用稳定的功能�
 
 ```mermaid
 flowchart LR
-    App[业务应用] -->|环境 Key 与固定别名| Edge[Minato 推理入口]
-    App -->|注册功能点| Management[管理服务]
+    App[业务应用] -->|环境 Key 与固定别名| Edge[推理模块]
+    App -->|注册功能点| Management[管理模块]
     Operator[管理员] --> Management
-    Management --> DB[(Minato Postgres)]
-    Worker[后台进程] --> DB
+    subgraph Minato[Minato 进程]
+      Edge
+      Management
+      Worker[后台任务]
+    end
+    Management --> DB[(Postgres)]
+    Worker --> DB
     Worker -->|模型目录| Sources[上游来源]
-    Worker -->|准备版本| Proxy[LiteLLM Proxy]
+    Worker -->|发布版本| Proxy[Go Runtime]
     Edge -->|读取身份与生效版本| DB
-    Edge -->|固定的内部模型组| Proxy
+    Edge -->|稳定的 Runtime 路由键| Proxy
     Proxy --> Sources
-    Edge -.->|客户端边界的采集事件| Worker
-    Proxy -.->|上游尝试事件| Worker
-    Worker -->|测试及回放请求| Edge
+    Proxy -.->|响应元数据与尝试日志| Management
 ```
 
-推理入口读取已发布版本，独立于管理服务进程。控制配置和鉴权数据库不可用时，推理入口返回 `503`。审计内容的异步写入异常有独立状态和计数，已开始的推理流继续返回。平台管理员在私有网络维护 LiteLLM 管理入口。
+推理模块每次读取已发布版本。数据库不可用时，推理返回 `503`。审计异步写入失败有独立计数，已开始的推理流继续返回。所有 Minato 模块共用一个进程和数据库连接池，LiteLLM 用量回调通过容器内部端口接收。
 
 详细设计中的接口、状态和默认值是实现约定。底座验证使用 LiteLLM `v1.85.0` 固定摘要。 [本地验证结果](../../tools/litellm-compat/README.md) · [兼容性验收](delivery.md#兼容性验证)

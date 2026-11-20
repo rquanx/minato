@@ -1,6 +1,6 @@
 # Minato
 
-Minato 是自托管 LLM 控制平面。业务按「项目 → 环境 → 功能点」接入，用固定别名发请求。管理员可以调整模型和回退策略，按功能点查看用量，并在开启调用审计后查看请求和响应、复制 Prompt、回放测试模型切换。数据平面默认兼容 LiteLLM，也可以切换到独立的 Go Runtime。
+Minato 是自托管 LLM 控制平面。业务按「项目 → 环境 → 功能点」接入，用固定别名发请求。管理员可以调整模型和回退策略，按功能点查看用量，并在开启调用审计后查看请求和响应、复制 Prompt、回放测试模型切换。数据平面默认使用独立的低内存 Go Runtime，也保留 LiteLLM 兼容模式。
 
 ```text
 业务应用 → Minato → 数据平面 → 首选模型来源
@@ -17,4 +17,4 @@ Minato 是自托管 LLM 控制平面。业务按「项目 → 环境 → 功能�
 
 使用 Docker Compose 启动管理界面和推理入口。管理端默认通过 `http://localhost:8088` 访问。 [安装步骤](docs/self-host.md)
 
-启用 Go Runtime 数据平面时，在同一目录执行 `docker compose -f compose.yaml -f compose.runtime.yaml up -d --build`。Runtime 只保存内存路由快照，Minato 仍负责项目、模型目录、路由版本、审计和用量归因。
+默认部署会在同一目录构建并启动 Go Runtime。Runtime 只保存内存路由快照，Minato 仍负责项目、模型目录、路由版本、审计和用量归因。LiteLLM 兼容模式通过 `compose.litellm.yaml` 单独启用。
