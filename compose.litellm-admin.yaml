@@ -1,0 +1,7 @@
+services:
+  litellm:
+    environment:
+      UI_USERNAME: ${LITELLM_UI_USERNAME:-admin}
+      UI_PASSWORD: ${LITELLM_UI_PASSWORD:?Set LITELLM_UI_PASSWORD before enabling the LiteLLM admin UI}
+    ports:
+      - "127.0.0.1:${LITELLM_UI_PORT:-18089}:4000"

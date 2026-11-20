@@ -1,23 +1,22 @@
-import Fastify from "fastify";
+import Fastify, { type FastifyInstance } from "fastify";
 import { z, ZodError } from "zod";
 import { ApiError } from "../../packages/contracts";
 import { connectDatabase } from "../../packages/db/client";
-import { createAuth } from "./auth";
+import { createAuth, type Database } from "./auth";
 import { registerFeatures } from "./features";
 import { registerProjects } from "./projects";
 import { registerRoutes } from "./routes";
 import { registerCatalog } from "./catalog";
-import { registerAudit } from "./audit";
+import { registerAudit, registerUsageCallback } from "./audit";
 import { registerTests } from "./tests";
 import { authorizeMember, registerMembers } from "./members";
 
-export function createControl(db = connectDatabase(), env = process.env) {
+export function registerControl(app: FastifyInstance, db: Database, env: NodeJS.ProcessEnv) {
   const password = env.MINATO_ADMIN_PASSWORD;
   const pepper = env.MINATO_KEY_PEPPER;
   if (!password || password.length < 12 || !pepper || pepper.length < 32) {
     throw new Error("Set MINATO_ADMIN_PASSWORD (12+ characters) and MINATO_KEY_PEPPER (32+ characters)");
   }
-  const app = Fastify({ logger: { level: env.MINATO_LOG_LEVEL ?? "info" }, disableRequestLogging: true });
   const auth = createAuth(db, pepper, password, env.MINATO_COOKIE_SECURE !== "false");
   app.decorateRequest("memberId", null);
 
@@ -37,16 +36,6 @@ export function createControl(db = connectDatabase(), env = process.env) {
     request.log.error({ code: failure.code }, "Control request failed");
     return reply.code(500).send({ code: "internal_error", message: "Request could not be completed", requestId: request.id });
   });
-  app.get("/health/live", async () => ({ status: "ok" }));
-  app.get("/health/ready", async (_request, reply) => {
-    try {
-      await db`select 1 from schema_migrations limit 1`;
-      return { database: "ready" };
-    } catch {
-      return reply.code(503).send({ database: "unavailable" });
-    }
-  });
-  app.addHook("onClose", () => db.close());
   app.addHook("preHandler", async (request) => {
     const path = request.routeOptions.url ?? "";
     if (!path.startsWith("/admin/v1/")) return;
@@ -90,12 +79,27 @@ export function createControl(db = connectDatabase(), env = process.env) {
     return reply.type("text/html; charset=utf-8").send(Buffer.from(await index.arrayBuffer()));
   });
   app.get("/assets/:file", async (request, reply) => {
-    const { file } = z.object({ file: z.string().regex(/^[a-zA-Z0-9_.-]+\.(?:js|css)$/) }).parse(request.params);
+    const { file } = z.object({ file: z.string().regex(/^[a-zA-Z0-9_.-]+\.(?:js|css|woff2)$/) }).parse(request.params);
     const asset = Bun.file(new URL("assets/" + file, webDirectory));
     if (!(await asset.exists())) return reply.code(404).send();
     return reply.type(asset.type).header("Cache-Control", "public, max-age=31536000, immutable")
       .send(Buffer.from(await asset.arrayBuffer()));
   });
+}
+
+export function createControl(db = connectDatabase(), env = process.env) {
+  const app = Fastify({ logger: { level: env.MINATO_LOG_LEVEL ?? "info" }, disableRequestLogging: true });
+  registerControl(app, db, env);
+  registerUsageCallback(app, db, env);
+  app.get("/health/ready", async (_request, reply) => {
+    try {
+      await db`select 1 from schema_migrations limit 1`;
+      return { database: "ready" };
+    } catch {
+      return reply.code(503).send({ database: "unavailable" });
+    }
+  });
+  app.addHook("onClose", () => db.close());
   return app;
 }
 
@@ -103,9 +107,3 @@ declare module "fastify" {
   interface FastifyRequest { memberId: string | null; }
 }
 
-if (import.meta.main) {
-  const app = createControl();
-  process.once("SIGINT", () => void app.close());
-  process.once("SIGTERM", () => void app.close());
-  await app.listen({ host: process.env.MINATO_HOST ?? "127.0.0.1", port: Number(process.env.MINATO_PORT ?? 4100) });
-}

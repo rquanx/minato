@@ -1,0 +1,10 @@
+services:
+  minato:
+    ports: !reset []
+  gateway:
+    image: caddy:2.10.2-alpine
+    ports:
+      - "127.0.0.1:${MINATO_PUBLIC_PORT:-8088}:8080"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+    depends_on: [minato]

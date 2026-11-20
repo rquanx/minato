@@ -61,4 +61,34 @@ assert.equal(result.model, alias);
 assert.equal(result.usage?.total_tokens, 10);
 const blocked = await fetch(base + "/internal/v1/litellm/usage", { method: "POST" });
 assert.equal(blocked.status, 404);
-console.log("Verified console assets, readiness, authentication, route publication and SDK inference through Compose.");
+
+headers["idempotency-key"] = crypto.randomUUID();
+const test = await admin(`/environments/${environment.id}/tests`, "POST", {
+  featureId: feature.id, endpoint: "responses",
+  request: { input: "delayed fixture" }, target: { mode: "active_route" },
+}, 202);
+delete headers["idempotency-key"];
+for (let i = 0; i < 30; i++) {
+  const current = await admin(`/tests/${test.id}`);
+  if (current.status === "running") break;
+  assert.equal(current.status, "queued");
+  assert(i < 29, "Replay never started");
+  await Bun.sleep(100);
+}
+const replacement = await admin(route + "/publish", "POST", { expectedRevision: 1 }, 202);
+for (let i = 0; i < 30; i++) {
+  const [current] = await admin(route + "/versions");
+  const replay = await admin(`/tests/${test.id}`);
+  assert.equal(replay.status, "running", "A running replay delayed route publication");
+  if (current.state === "active" && current.version === replacement.version) break;
+  assert(i < 29, "Replacement route never became active");
+  await Bun.sleep(100);
+}
+for (let i = 0; i < 60; i++) {
+  const current = await admin(`/tests/${test.id}`);
+  if (current.status === "succeeded") break;
+  assert.equal(current.status, "running");
+  assert(i < 59, "Replay did not finish");
+  await Bun.sleep(100);
+}
+console.log("Verified console assets, readiness, authentication, SDK inference and route publication during replay through Compose.");

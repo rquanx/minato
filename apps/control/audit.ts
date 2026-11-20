@@ -15,8 +15,7 @@ const list = z.object({
 });
 const cursor = z.tuple([z.iso.datetime({ offset: true }), uuid]);
 
-export function registerAudit(app: FastifyInstance, db: Database, env: NodeJS.ProcessEnv) {
-  const cipher = auditCipher(env);
+export function registerUsageCallback(app: FastifyInstance, db: Database, env: NodeJS.ProcessEnv) {
   const digest = (value: string) => createHash("sha256").update(value).digest();
   app.post("/internal/v1/litellm/usage", async (request, reply) => {
     const secret = env.MINATO_CALLBACK_SECRET;
@@ -27,6 +26,10 @@ export function registerAudit(app: FastifyInstance, db: Database, env: NodeJS.Pr
     await saveUsage(db, input.attemptId, input.usage);
     return reply.code(204).send();
   });
+}
+
+export function registerAudit(app: FastifyInstance, db: Database, env: NodeJS.ProcessEnv) {
+  const cipher = auditCipher(env);
   app.get("/admin/v1/environments/:id/audit-policy", async (request) => {
     const { id } = idPath.parse(request.params);
     const [row] = await db`select audit_enabled as enabled, audit_days as "retentionDays",

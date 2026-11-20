@@ -24,7 +24,7 @@ class MinatoCallbacks(CustomLogger):
             return
         payload = json.dumps({"attemptId": attempt, "usage": usage}).encode()
         request = Request(
-            os.getenv("MINATO_CALLBACK_URL", "http://control:4100/internal/v1/litellm/usage"),
+            os.getenv("MINATO_CALLBACK_URL", "http://minato:4101/internal/v1/litellm/usage"),
             data=payload,
             headers={"Content-Type": "application/json", "Authorization": f"Bearer {secret}"},
         )

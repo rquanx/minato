@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { Activity, ArrowUpRight, FlaskConical, Layers3, LogOut, Network, ScrollText, Waypoints } from "lucide-react";
+import { Activity, ChevronRight, FlaskConical, Layers3, LogOut, Network, ScrollText, Waypoints } from "lucide-react";
 import { api, memberSession, message, session, type Environment, type Feature, type Project, type Source } from "./api";
 import { Fields, Notice, value } from "./components";
 import { Projects } from "./projects";
@@ -23,7 +23,7 @@ function selectedPage(): Page {
   return page && Object.hasOwn(pages, page) ? page : "projects";
 }
 function Logo() {
-  return <div className="wordmark"><span><Waypoints size={23}/></span>Minato</div>;
+  return <div className="wordmark"><span><Waypoints aria-hidden="true" size={20}/></span>Minato</div>;
 }
 
 function App() {
@@ -74,15 +74,17 @@ function App() {
   }
   useEffect(() => { if (signedIn) void refresh().catch((error) => setNotice(message(error))); }, [signedIn, projectId, environmentId]);
   if (!signedIn) return <main className="login">
-    <div className="login-art"><Logo/><div><span className="chapeau">LLM Gateway</span><h1>One route.<br/><em>Many models.</em></h1></div></div>
-    <div className="login-form"><h2>Sign in</h2>{notice && <Notice>{notice}</Notice>}
+    <section className="login-form" aria-labelledby="sign-in-heading">
+      <Logo/>
+      <h1 id="sign-in-heading">Sign in</h1>
+      {notice && <Notice>{notice}</Notice>}
       {signedIn === false && <Fields label="Open console" alert={setNotice} submit={async (form) => {
         await api("/session", "POST", { password: String(form.get("password") ?? ""), username: value(form, "username") || undefined });
         setSignedIn(await session()); setNotice("");
         if (memberSession) navigate("usage");
       }}><label>Username<input name="username" autoComplete="username" placeholder="Leave blank for administrator"/></label>
         <label>Password<input name="password" type="password" required autoComplete="current-password"/></label></Fields>}
-    </div>
+    </section>
   </main>;
   return <div className="shell">
     <aside className="sidebar">
@@ -99,7 +101,7 @@ function App() {
     </aside>
     <main className="workspace">
       <header className="topbar">
-        <div className="breadcrumb"><span>Workspace</span><ArrowUpRight size={13}/><span>{pages[page].label}</span></div>
+        <div className="breadcrumb"><span>Workspace</span><ChevronRight aria-hidden="true" size={14}/><span>{pages[page].label}</span></div>
         <div className="scope">
           <select aria-label="Project" value={projectId} onChange={(event) => {
             refreshVersion.current++;
