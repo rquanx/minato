@@ -12,6 +12,8 @@ To use the bundled Caddy reverse proxy, add `-f compose.yaml -f compose.caddy.ya
 
 The default deployment uses the low-memory Go Runtime. Minato publishes complete route snapshots to Runtime. Runtime performs upstream fallback and serves the OpenAI-compatible inference endpoints. The runtime image is built from the sibling `minato-runtime` checkout referenced by `compose.yaml`, so clone both repositories next to each other before building.
 
+For multiple Runtime replicas, keep `MINATO_RUNTIME_BASE_URL` pointed at the inference load balancer and set `MINATO_RUNTIME_PUBLISH_URLS` to the comma-separated internal URLs of every replica. Route publication succeeds only after every listed replica accepts the snapshot.
+
 ## LiteLLM admin UI
 
 LiteLLM remains available as a migration compatibility data plane. Set `LITELLM_MASTER_KEY` and `LITELLM_UI_PASSWORD` in your Compose environment. `LITELLM_UI_USERNAME` defaults to `admin` and `LITELLM_UI_PORT` defaults to `18089`. Enable the compatibility stack and loopback listener by applying both overrides to the same Compose project.

@@ -7,15 +7,17 @@ export function runtimeRouteKey(featureId: string, version: string) {
 export function runtimeConfig(env = process.env) {
   if (!env.MINATO_RUNTIME_BASE_URL) throw new Error("MINATO_RUNTIME_BASE_URL is required");
   const base = new URL(env.MINATO_RUNTIME_BASE_URL);
+  const publishBases = (env.MINATO_RUNTIME_PUBLISH_URLS ?? env.MINATO_RUNTIME_BASE_URL)
+    .split(",").map((value) => new URL(value.trim())).filter((value, index, values) => values.findIndex((item) => item.href === value.href) === index);
   const token = env.MINATO_RUNTIME_TOKEN;
   if (!token) throw new Error("MINATO_RUNTIME_TOKEN is required");
-  return { base, headers: { authorization: `Bearer ${token}` } };
+  return { base, publishBases, headers: { authorization: `Bearer ${token}` } };
 }
 
 export function createRuntime(env = process.env) {
-  const { base, headers } = runtimeConfig(env);
-  async function request(path: string, init: RequestInit = {}) {
-    return fetch(new URL(path, base), {
+  const { base, publishBases, headers } = runtimeConfig(env);
+  async function requestAt(target: URL, path: string, init: RequestInit = {}) {
+    return fetch(new URL(path, target), {
       ...init,
       headers: { ...headers, "content-type": "application/json", ...init.headers },
       signal: init.signal ? AbortSignal.any([init.signal, AbortSignal.timeout(10_000)]) : AbortSignal.timeout(10_000),
@@ -28,13 +30,15 @@ export function createRuntime(env = process.env) {
       credentialRef: entry.credentialEnv, endpoint: entry.upstreamEndpoint };
   }
   async function publish(alias: string, version: string, deployments: Candidate[], signal?: AbortSignal) {
-    const response = await request(`/internal/v1/routes/${encodeURIComponent(alias)}`, {
-      method: "PUT",
-      signal,
-      body: JSON.stringify({ alias, version, candidates: deployments.map(serialize) }),
-    });
-    await response.body?.cancel();
-    if (!response.ok) throw new Error("runtime_route_publish_failed");
+    const body = JSON.stringify({ alias, version, candidates: deployments.map(serialize) });
+    const results = await Promise.all(publishBases.map(async (target) => {
+      const response = await requestAt(target, `/internal/v1/routes/${encodeURIComponent(alias)}`, {
+        method: "PUT", signal, body,
+      });
+      await response.body?.cancel();
+      return response.ok;
+    }));
+    if (results.some((ok) => !ok)) throw new Error("runtime_route_publish_failed");
   }
   return {
     async stage(group: string, deployment: Candidate) {
