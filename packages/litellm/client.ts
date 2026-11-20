@@ -48,8 +48,8 @@ export function createLiteLlm(env = process.env) {
       if ((await listIds()).has(group)) return;
       const key = env[deployment.credentialEnv];
       if (!key) throw new Error("upstream_credential_missing");
-      const prefix = deployment.upstreamEndpoint === "responses" ? "openai/" : "openai/chat_completions/";
-      const endpoint = deployment.upstreamEndpoint === "responses" ? "/v1/responses" : "/v1/chat/completions";
+      const prefix = deployment.upstreamEndpoint === "chat-completions" ? "openai/chat_completions/" : "openai/";
+      const endpoint = `/v1/${deployment.upstreamEndpoint === "chat-completions" ? "chat/completions" : deployment.upstreamEndpoint}`;
       const response = await request("/model/new", {
         model_name: group,
         litellm_params: {

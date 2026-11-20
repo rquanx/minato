@@ -7,6 +7,7 @@ const common = ["model", "stream", "temperature", "top_p", "tools", "tool_choice
 const allowed = {
   responses: new Set([...common, "input", "instructions", "max_output_tokens", "reasoning", "text", "truncation"]),
   "chat-completions": new Set([...common, "messages", "max_tokens", "max_completion_tokens", "response_format", "stream_options", "seed", "frequency_penalty", "presence_penalty"]),
+  embeddings: new Set(["model", "input", "encoding_format", "dimensions", "user"]),
 };
 
 export type Endpoint = z.infer<typeof endpoint>;
@@ -36,6 +37,9 @@ export function validateInput(body: unknown, path: Endpoint) {
   if (path === "chat-completions" && (!Array.isArray(input.messages) || !input.messages.length)) {
     throw new ApiError(400, "invalid_messages", "Chat Completions requires messages");
   }
+  if (path === "embeddings" && input.stream !== undefined) {
+    throw new ApiError(400, "unsupported_parameter", "Embeddings does not support streaming");
+  }
   return input as Record<string, unknown> & { model: string; stream?: boolean };
 }
 
@@ -52,7 +56,7 @@ export function createInference(env = process.env) {
     onAttemptStart?: (attempt: { id: string; sourceId: string; modelId: string }) => void;
   }) {
     const { snapshot, body } = options;
-    const path = snapshot.requirements.endpoint === "responses" ? "/v1/responses" : "/v1/chat/completions";
+    const path = upstreamPath(snapshot.requirements.endpoint);
     if (body.stream && snapshot.requirements.streaming === false) {
       throw new ApiError(400, "streaming_unavailable", "This feature does not support streaming");
     }
@@ -148,7 +152,7 @@ function createRuntimeInference(env: NodeJS.ProcessEnv) {
     options.onAttemptStart?.({ id, sourceId: first.sourceId, modelId: first.modelId });
     const attemptHeaders: Record<string, string> = { ...headers, "content-type": "application/json", "x-minato-request-id": id };
     if (options.sessionHeader) attemptHeaders["x-opencode-session"] = options.sessionHeader;
-    const path = snapshot.requirements.endpoint === "responses" ? "/v1/responses" : "/v1/chat/completions";
+    const path = upstreamPath(snapshot.requirements.endpoint);
     const signal = AbortSignal.any([options.signal, AbortSignal.timeout(120_000)]);
     const send = () => fetch(new URL(path, base), {
       method: "POST", headers: attemptHeaders, redirect: "error", signal,
@@ -198,6 +202,10 @@ function createRuntimeInference(env: NodeJS.ProcessEnv) {
     if (response.ok && payload) return { status: response.status, payload: { ...payload, model: snapshot.alias } };
     throw new ApiError(response.status >= 400 ? response.status : 502, "upstream_error", "Runtime request could not be completed");
   };
+}
+
+function upstreamPath(endpoint: Endpoint) {
+  return endpoint === "responses" ? "/v1/responses" : endpoint === "chat-completions" ? "/v1/chat/completions" : "/v1/embeddings";
 }
 
 function rewriteEvent(frame: string, alias: string) {

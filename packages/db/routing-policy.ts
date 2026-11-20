@@ -36,9 +36,12 @@ export async function previewCandidates(db: Query, feature: { declaration: unkno
     if (row) sourceVersions[row.slug] = { revision: row.revision, syncedAt: row.last_success_at };
     const upstreamEndpoint = metadata.upstreamEndpoint ?? row?.default_endpoint;
     const structured = metadata.structuredOutput === "json_schema" || metadata.structuredOutput === requirements.structuredOutput;
+    const protocolCompatible = requirements.endpoint === upstreamEndpoint ||
+      (requirements.endpoint === "responses" && upstreamEndpoint === "chat-completions") ||
+      (requirements.endpoint === "chat-completions" && upstreamEndpoint === "responses");
     const reason = !row ? "model_unknown"
       : !row.enabled || row.status !== "listed" ? "model_unavailable"
-      : requirements.endpoint === "chat-completions" && upstreamEndpoint === "responses" ? "endpoint_mismatch"
+      : !protocolCompatible ? "endpoint_mismatch"
       : requirements.minContextTokens && !(metadata.contextTokens >= requirements.minContextTokens) ? "context_mismatch"
       : requirements.structuredOutput && !structured ? "structured_output_mismatch"
       : requirements.streaming && metadata.streaming !== true ? "streaming_unknown"

@@ -3,7 +3,7 @@ import { z } from "zod";
 export const slug = z.string().regex(/^[a-z0-9](?:[a-z0-9-]{0,46}[a-z0-9])?$/);
 export const uuid = z.uuid();
 export const displayName = z.string().trim().min(1).max(160);
-export const endpoint = z.enum(["responses", "chat-completions"]);
+export const endpoint = z.enum(["responses", "chat-completions", "embeddings"]);
 export const namedResource = z.strictObject({ slug, displayName });
 export const modelReference = z.strictObject({
   sourceId: z.string().min(1).max(160),

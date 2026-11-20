@@ -50,7 +50,7 @@ export function registerIngress(app: FastifyInstance, db: Database, env: NodeJS.
     return { object: "list", data: rows.map(({ alias }) => ({ id: alias, object: "model", owned_by: "minato" })) };
   });
   for (const [url, endpoint] of [
-    ["/v1/responses", "responses"], ["/v1/chat/completions", "chat-completions"],
+    ["/v1/responses", "responses"], ["/v1/chat/completions", "chat-completions"], ["/v1/embeddings", "embeddings"],
   ] as const satisfies ReadonlyArray<readonly [string, Endpoint]>) {
     app.post(url, async (request, reply) => {
       const identity = await auth.environment(request);
