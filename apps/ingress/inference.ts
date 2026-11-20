@@ -160,6 +160,20 @@ function createRuntimeInference(env: NodeJS.ProcessEnv) {
     }
     const sourceId = response.headers.get("x-minato-runtime-source") || first.sourceId;
     const actualModelId = response.headers.get("x-minato-runtime-model") || first.modelId;
+    const reportAttempts = () => {
+      const encoded = response.headers.get("x-minato-runtime-attempt-log");
+      if (!encoded) return false;
+      try {
+        const attempts = JSON.parse(Buffer.from(encoded, "base64url").toString()) as Array<Record<string, unknown>>;
+        for (const attempt of attempts) {
+          if (typeof attempt.id !== "string" || typeof attempt.sourceId !== "string" || typeof attempt.modelId !== "string") continue;
+          options.onAttempt?.({ id: attempt.id, sourceId: attempt.sourceId, modelId: attempt.modelId,
+            status: Number(attempt.status) || response.status, durationMs: Number(attempt.durationMs) || 0,
+            retryable: Boolean(attempt.retryable), usage: attempt.usage });
+        }
+        return attempts.length > 0;
+      } catch { return false; }
+    };
     if (response.ok && body.stream) {
       if (!response.body || !response.headers.get("content-type")?.includes("text/event-stream")) {
         await response.body?.cancel();
@@ -167,11 +181,11 @@ function createRuntimeInference(env: NodeJS.ProcessEnv) {
         throw new ApiError(502, "upstream_error", "Runtime returned an invalid stream");
       }
       const stream = await startSse(response.body, snapshot.alias);
-      options.onAttempt?.({ id, sourceId, modelId: actualModelId, status: response.status, durationMs: performance.now() - started, retryable: false });
+      if (!reportAttempts()) options.onAttempt?.({ id, sourceId, modelId: actualModelId, status: response.status, durationMs: performance.now() - started, retryable: false });
       return { status: response.status, stream };
     }
     const payload = await response.json().catch(() => null) as Record<string, unknown> | null;
-    options.onAttempt?.({ id, sourceId, modelId: actualModelId, status: response.status, durationMs: performance.now() - started,
+    if (!reportAttempts()) options.onAttempt?.({ id, sourceId, modelId: actualModelId, status: response.status, durationMs: performance.now() - started,
       retryable: !response.ok && (response.status === 429 || response.status >= 500), usage: payload?.usage });
     if (response.ok && payload) return { status: response.status, payload: { ...payload, model: snapshot.alias } };
     throw new ApiError(response.status >= 400 ? response.status : 502, "upstream_error", "Runtime request could not be completed");
