@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { ApiError, endpoint } from "../../packages/contracts";
 import { candidate, liteLlmConfig, modelGroup } from "../../packages/litellm/client";
+import { runtimeConfig } from "../../packages/runtime/client";
 
 const common = ["model", "stream", "temperature", "top_p", "tools", "tool_choice", "parallel_tool_calls", "stop"];
 const allowed = {
@@ -39,6 +40,7 @@ export function validateInput(body: unknown, path: Endpoint) {
 }
 
 export function createInference(env = process.env) {
+  if (env.MINATO_DATA_PLANE === "runtime") return createRuntimeInference(env);
   const { base, headers } = liteLlmConfig(env);
   return async function infer(options: {
     snapshot: Snapshot;
@@ -120,6 +122,57 @@ export function createInference(env = process.env) {
     }
     throw new ApiError(lastStatus, "upstream_error", lastStatus === 400 || lastStatus === 422
       ? "Upstream rejected the request parameters" : "Upstream request could not be completed");
+  };
+}
+
+function createRuntimeInference(env: NodeJS.ProcessEnv) {
+  const { base, headers } = runtimeConfig(env);
+  return async function infer(options: {
+    snapshot: Snapshot;
+    body: ReturnType<typeof validateInput>;
+    sessionHeader?: string;
+    groupOverride?: string;
+    signal: AbortSignal;
+    onAttempt?: (attempt: Attempt) => void;
+    onAttemptStart?: (attempt: { id: string; sourceId: string; modelId: string }) => void;
+  }) {
+    const { snapshot, body } = options;
+    if (body.stream && snapshot.requirements.streaming === false) {
+      throw new ApiError(400, "streaming_unavailable", "This feature does not support streaming");
+    }
+    const id = crypto.randomUUID();
+    const started = performance.now();
+    const first = snapshot.candidates[0];
+    const modelId = options.groupOverride ?? snapshot.alias;
+    options.onAttemptStart?.({ id, sourceId: first.sourceId, modelId: first.modelId });
+    const attemptHeaders: Record<string, string> = { ...headers, "content-type": "application/json", "x-minato-request-id": id };
+    if (options.sessionHeader) attemptHeaders["x-opencode-session"] = options.sessionHeader;
+    const path = snapshot.requirements.endpoint === "responses" ? "/v1/responses" : "/v1/chat/completions";
+    let response: Response;
+    try {
+      response = await fetch(new URL(path, base), {
+        method: "POST", headers: attemptHeaders, redirect: "error", signal: AbortSignal.any([options.signal, AbortSignal.timeout(120_000)]),
+        body: JSON.stringify({ ...body, model: modelId }),
+      });
+    } catch {
+      options.onAttempt?.({ id, sourceId: first.sourceId, modelId: first.modelId, status: 504, durationMs: performance.now() - started, retryable: !options.signal.aborted });
+      throw new ApiError(504, "upstream_error", "Runtime request could not be completed");
+    }
+    if (response.ok && body.stream) {
+      if (!response.body || !response.headers.get("content-type")?.includes("text/event-stream")) {
+        await response.body?.cancel();
+        options.onAttempt?.({ id, sourceId: first.sourceId, modelId: first.modelId, status: 502, durationMs: performance.now() - started, retryable: false });
+        throw new ApiError(502, "upstream_error", "Runtime returned an invalid stream");
+      }
+      const stream = await startSse(response.body, snapshot.alias);
+      options.onAttempt?.({ id, sourceId: first.sourceId, modelId: first.modelId, status: response.status, durationMs: performance.now() - started, retryable: false });
+      return { status: response.status, stream };
+    }
+    const payload = await response.json().catch(() => null) as Record<string, unknown> | null;
+    options.onAttempt?.({ id, sourceId: first.sourceId, modelId: first.modelId, status: response.status, durationMs: performance.now() - started,
+      retryable: !response.ok && (response.status === 429 || response.status >= 500), usage: payload?.usage });
+    if (response.ok && payload) return { status: response.status, payload: { ...payload, model: snapshot.alias } };
+    throw new ApiError(response.status >= 400 ? response.status : 502, "upstream_error", "Runtime request could not be completed");
   };
 }
 

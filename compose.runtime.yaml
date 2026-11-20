@@ -1,0 +1,18 @@
+services:
+  minato:
+    environment:
+      MINATO_DATA_PLANE: runtime
+      MINATO_RUNTIME_BASE_URL: http://runtime:4300
+      MINATO_RUNTIME_TOKEN: ${MINATO_RUNTIME_TOKEN:?Set MINATO_RUNTIME_TOKEN in .env}
+    depends_on:
+      runtime:
+        condition: service_started
+
+  runtime:
+    image: minato-runtime:local
+    build:
+      context: ../minato-runtime
+    environment:
+      MINATO_RUNTIME_PORT: "4300"
+      MINATO_RUNTIME_TOKEN: ${MINATO_RUNTIME_TOKEN:?Set MINATO_RUNTIME_TOKEN in .env}
+    restart: unless-stopped

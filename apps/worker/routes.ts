@@ -1,10 +1,13 @@
 import { z } from "zod";
 import type { connectDatabase } from "../../packages/db/client";
 import { candidate, modelGroup, type createLiteLlm } from "../../packages/litellm/client";
+import type { createRuntime } from "../../packages/runtime/client";
+
+type RoutePublisher = ReturnType<typeof createLiteLlm> | ReturnType<typeof createRuntime>;
 
 export async function publishNextRoute(
   db: ReturnType<typeof connectDatabase>,
-  proxy: ReturnType<typeof createLiteLlm>,
+  proxy: RoutePublisher,
 ) {
   const lease = crypto.randomUUID();
   const [route] = await db`update route_versions r
@@ -16,10 +19,11 @@ export async function publishNextRoute(
     returning r.feature_id, r.version::text as version, r.candidates, r.approved_policy`;
   if (!route) return false;
   try {
+    const [feature] = await db`select alias from features where id = ${route.feature_id}`;
+    if (!feature?.alias) throw new Error("feature_alias_missing");
     const candidates = z.array(candidate).parse(route.candidates);
-    for (const [index, entry] of candidates.entries()) {
-      await proxy.stage(modelGroup(route.feature_id, route.version, index), entry);
-    }
+    if ("publish" in proxy) await proxy.publish(feature.alias, route.version, candidates);
+    else for (const [index, entry] of candidates.entries()) await proxy.stage(modelGroup(route.feature_id, route.version, index), entry);
     await db.begin(async (tx) => {
       const [feature] = await tx`select desired_version::text as desired from features where id = ${route.feature_id} for update`;
       const state = feature.desired === route.version ? "active" : "superseded";

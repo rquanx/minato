@@ -5,9 +5,10 @@ import { ApiError, endpoint } from "../../packages/contracts";
 import type { connectDatabase } from "../../packages/db/client";
 import { previewCandidates } from "../../packages/db/routing-policy";
 import type { createLiteLlm } from "../../packages/litellm/client";
+import type { createRuntime } from "../../packages/runtime/client";
 import { testTarget } from "../control/tests";
 
-export function createTestRunner(db: ReturnType<typeof connectDatabase>, proxy: ReturnType<typeof createLiteLlm>, env = process.env) {
+export function createTestRunner(db: ReturnType<typeof connectDatabase>, proxy: ReturnType<typeof createLiteLlm> | ReturnType<typeof createRuntime>, env = process.env) {
   const cipher = auditCipher(env);
   const infer = createInference(env);
   const audit = createAudit(db, env);

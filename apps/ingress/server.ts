@@ -1,9 +1,10 @@
 import { Readable } from "node:stream";
-import Fastify from "fastify";
+import Fastify, { type FastifyInstance } from "fastify";
 import { ApiError } from "../../packages/contracts";
 import { connectDatabase } from "../../packages/db/client";
 import { liteLlmConfig } from "../../packages/litellm/client";
-import { createAuth } from "../control/auth";
+import { runtimeConfig } from "../../packages/runtime/client";
+import { createAuth, type Database } from "../control/auth";
 import { createInference, routeSnapshot, validateInput, type Endpoint } from "./inference";
 import { createAudit, observeSse } from "./audit";
 import { auditPolicy } from "../../packages/db/audit";
@@ -15,14 +16,13 @@ function publicError(error: unknown) {
   return { status, payload: { error: { message, type: code, code, param: null } } };
 }
 
-export function createIngress(db = connectDatabase(), env = process.env) {
+export function registerIngress(app: FastifyInstance, db: Database, env: NodeJS.ProcessEnv) {
   if (!env.MINATO_KEY_PEPPER || env.MINATO_KEY_PEPPER.length < 32) {
     throw new Error("Set MINATO_KEY_PEPPER (32+ characters)");
   }
-  const app = Fastify({ genReqId: () => crypto.randomUUID(), disableRequestLogging: true, logger: true });
   const auth = createAuth(db, env.MINATO_KEY_PEPPER, "", false);
   const infer = createInference(env);
-  const proxy = liteLlmConfig(env);
+  const proxy = env.MINATO_DATA_PLANE === "runtime" ? runtimeConfig(env) : liteLlmConfig(env);
   const audit = createAudit(db, env);
   app.addHook("onRequest", async (request, reply) => {
     reply.header("X-Request-Id", request.id);
@@ -36,11 +36,13 @@ export function createIngress(db = connectDatabase(), env = process.env) {
   app.get("/health/ready", async (_request, reply) => {
     const [database, upstream] = await Promise.allSettled([
       db`select 1 from schema_migrations limit 1`,
-      fetch(new URL("/health/liveliness", proxy.base), { headers: proxy.headers, signal: AbortSignal.timeout(2_000) }),
+      fetch(new URL(env.MINATO_DATA_PLANE === "runtime" ? "/healthz" : "/health/liveliness", proxy.base), { headers: proxy.headers, signal: AbortSignal.timeout(2_000) }),
     ]);
-    const checks = { database: database.status === "fulfilled", litellm: upstream.status === "fulfilled" && upstream.value.ok };
+    const databaseReady = database.status === "fulfilled";
+    const upstreamReady = upstream.status === "fulfilled" && upstream.value.ok;
+    const checks = { database: databaseReady, [env.MINATO_DATA_PLANE === "runtime" ? "runtime" : "litellm"]: upstreamReady };
     if (upstream.status === "fulfilled") await upstream.value.body?.cancel();
-    return reply.code(checks.database && checks.litellm ? 200 : 503).send({ ...checks, audit: audit.stats() });
+    return reply.code(databaseReady && upstreamReady ? 200 : 503).send({ ...checks, audit: audit.stats() });
   });
   app.get("/v1/models", async (request) => {
     const identity = await auth.environment(request);
@@ -99,13 +101,12 @@ export function createIngress(db = connectDatabase(), env = process.env) {
       }
     });
   }
-  app.addHook("onClose", async () => { await audit.flush(); await db.close(); });
-  return app;
+  app.addHook("onClose", () => audit.flush());
 }
 
-if (import.meta.main) {
-  const app = createIngress();
-  process.once("SIGINT", () => void app.close());
-  process.once("SIGTERM", () => void app.close());
-  await app.listen({ host: process.env.MINATO_HOST ?? "127.0.0.1", port: Number(process.env.MINATO_INGRESS_PORT ?? 4200) });
+export function createIngress(db = connectDatabase(), env = process.env) {
+  const app = Fastify({ genReqId: () => crypto.randomUUID(), disableRequestLogging: true, logger: true });
+  app.register(async (scope) => registerIngress(scope, db, env));
+  app.addHook("onClose", () => db.close());
+  return app;
 }
