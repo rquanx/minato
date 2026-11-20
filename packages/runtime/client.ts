@@ -22,10 +22,9 @@ export function createRuntime(env = process.env) {
     });
   }
   function serialize(entry: Candidate) {
-    const apiKey = env[entry.credentialEnv];
-    if (!apiKey) throw new Error("upstream_credential_missing");
+    if (!env[entry.credentialEnv]) throw new Error("upstream_credential_missing");
     return { sourceId: entry.sourceId, modelId: entry.modelId, apiBase: entry.apiBase,
-      apiKey, endpoint: entry.upstreamEndpoint };
+      credentialRef: entry.credentialEnv, endpoint: entry.upstreamEndpoint };
   }
   async function publish(alias: string, version: string, deployments: Candidate[]) {
     const response = await request(`/internal/v1/routes/${encodeURIComponent(alias)}`, {

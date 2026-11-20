@@ -12,6 +12,7 @@ services:
     image: minato-runtime:local
     build:
       context: ../minato-runtime
+    env_file: ${MINATO_ENV_FILE:-.env}
     environment:
       MINATO_RUNTIME_PORT: "4300"
       MINATO_RUNTIME_TOKEN: ${MINATO_RUNTIME_TOKEN:?Set MINATO_RUNTIME_TOKEN in .env}
