@@ -158,18 +158,20 @@ function createRuntimeInference(env: NodeJS.ProcessEnv) {
       options.onAttempt?.({ id, sourceId: first.sourceId, modelId: first.modelId, status: 504, durationMs: performance.now() - started, retryable: !options.signal.aborted });
       throw new ApiError(504, "upstream_error", "Runtime request could not be completed");
     }
+    const sourceId = response.headers.get("x-minato-runtime-source") || first.sourceId;
+    const actualModelId = response.headers.get("x-minato-runtime-model") || first.modelId;
     if (response.ok && body.stream) {
       if (!response.body || !response.headers.get("content-type")?.includes("text/event-stream")) {
         await response.body?.cancel();
-        options.onAttempt?.({ id, sourceId: first.sourceId, modelId: first.modelId, status: 502, durationMs: performance.now() - started, retryable: false });
+        options.onAttempt?.({ id, sourceId, modelId: actualModelId, status: 502, durationMs: performance.now() - started, retryable: false });
         throw new ApiError(502, "upstream_error", "Runtime returned an invalid stream");
       }
       const stream = await startSse(response.body, snapshot.alias);
-      options.onAttempt?.({ id, sourceId: first.sourceId, modelId: first.modelId, status: response.status, durationMs: performance.now() - started, retryable: false });
+      options.onAttempt?.({ id, sourceId, modelId: actualModelId, status: response.status, durationMs: performance.now() - started, retryable: false });
       return { status: response.status, stream };
     }
     const payload = await response.json().catch(() => null) as Record<string, unknown> | null;
-    options.onAttempt?.({ id, sourceId: first.sourceId, modelId: first.modelId, status: response.status, durationMs: performance.now() - started,
+    options.onAttempt?.({ id, sourceId, modelId: actualModelId, status: response.status, durationMs: performance.now() - started,
       retryable: !response.ok && (response.status === 429 || response.status >= 500), usage: payload?.usage });
     if (response.ok && payload) return { status: response.status, payload: { ...payload, model: snapshot.alias } };
     throw new ApiError(response.status >= 400 ? response.status : 502, "upstream_error", "Runtime request could not be completed");
