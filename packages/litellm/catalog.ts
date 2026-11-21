@@ -16,6 +16,10 @@ export const capabilities = z.strictObject({
   structuredOutput: z.enum(["json_object", "json_schema"]).optional(),
   streaming: z.boolean().optional(),
   tools: z.boolean().optional(),
+  inputPricePerMillion: z.number().nonnegative().optional(),
+  outputPricePerMillion: z.number().nonnegative().optional(),
+  cachedInputPricePerMillion: z.number().nonnegative().optional(),
+  priceCurrency: z.string().regex(/^[A-Z]{3}$/).optional(),
 });
 const directory = z.object({
   data: z.array(z.object({ id: z.string().min(1).max(256) }).loose()).max(20_000),

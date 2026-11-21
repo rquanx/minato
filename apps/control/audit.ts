@@ -129,6 +129,29 @@ export function registerAudit(app: FastifyInstance, db: Database, env: NodeJS.Pr
       coalesce(sum(u.total_tokens), 0)::text as "knownTotalTokens",
       coalesce(sum(u.input_tokens), 0)::text as "inputTokens", coalesce(sum(u.output_tokens), 0)::text as "outputTokens"
     from period p join call_attempts a on p.request_id = a.request_id left join attempt_usage u on a.id = u.attempt_id`;
-    return totals;
+    const [cost] = await db`with period as (
+      select request_id from calls where environment_id = ${id}
+      and started_at >= coalesce(${range.from ?? null}::timestamptz, now() - interval '7 days')
+      and started_at < coalesce(${range.to ?? null}::timestamptz, now())
+      and (${range.featureId ?? null}::uuid is null or feature_id = ${range.featureId ?? null})
+      and (${range.kind ?? null}::text is null or kind = ${range.kind ?? null})
+    ), priced as (
+      select u.input_tokens, u.output_tokens,
+        case when (m.capability_override->>'inputPricePerMillion') ~ '^[0-9]+(\\.[0-9]+)?$'
+          then (m.capability_override->>'inputPricePerMillion')::numeric end as input_price,
+        case when (m.capability_override->>'outputPricePerMillion') ~ '^[0-9]+(\\.[0-9]+)?$'
+          then (m.capability_override->>'outputPricePerMillion')::numeric end as output_price
+      from period p join call_attempts a on p.request_id = a.request_id
+      left join attempt_usage u on a.id = u.attempt_id
+      left join sources s on s.slug = a.source_id
+      left join source_models m on m.source_id = s.id and m.raw_model_id = a.model_id
+    )
+    select count(*) filter(where input_price is not null and output_price is not null
+      and input_tokens is not null and output_tokens is not null)::int as "costKnownAttempts",
+      coalesce(sum(case when input_price is not null and output_price is not null
+        then coalesce(input_tokens, 0) * input_price / 1000000
+          + coalesce(output_tokens, 0) * output_price / 1000000 else 0 end), 0)::numeric(20,8)::text as "estimatedCostUsd"
+    from priced`;
+    return { ...totals, ...cost };
   });
 }

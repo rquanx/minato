@@ -8,7 +8,8 @@ export type Replay = { replayOf: string; featureId: string; endpoint: string; in
 type CallDetails = { request_id: string; feature_id: string; endpoint: string; status: string; duration_ms?: number;
   attempts: Record<string, unknown>[]; alias: string };
 type Content = { state: string; content: { kind: string; state: string; value: any }[] };
-type Usage = { requestCount: number; attemptCount: number; unknownAttempts: number; knownTotalTokens: string };
+type Usage = { requestCount: number; attemptCount: number; unknownAttempts: number; knownTotalTokens: string;
+  costKnownAttempts?: number; estimatedCostUsd?: string };
 
 export function Calls({ environment, features, view, alert, replay }: {
   environment?: Environment; features: Feature[]; view: "usage" | "calls"; alert: (value: string) => void; replay: (item: Replay) => void;
@@ -60,6 +61,7 @@ export function Calls({ environment, features, view, alert, replay }: {
     {view === "usage" && usage && <div className="metrics">{[
       ["Requests", usage.requestCount], ["Attempts", usage.attemptCount],
       ["Known tokens", usage.knownTotalTokens], ["Usage unavailable", usage.unknownAttempts],
+      ["Estimated cost", usage.estimatedCostUsd ? `$${Number(usage.estimatedCostUsd).toFixed(4)}` : "Unknown"],
     ].map(([label, value]) => <div key={label}><span>{label}</span><strong>{Number(value).toLocaleString()}</strong></div>)}</div>}
     <Panel title="Recent calls" action={<div className="actions">
       <select aria-label="Feature" value={feature} onChange={(event) => filter("featureId", event.target.value)}>
