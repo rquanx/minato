@@ -137,9 +137,11 @@ export function registerAudit(app: FastifyInstance, db: Database, env: NodeJS.Pr
       and (${range.kind ?? null}::text is null or kind = ${range.kind ?? null})
     ), priced as (
       select u.input_tokens, u.output_tokens,
-        case when (m.capability_override->>'inputPricePerMillion') ~ '^[0-9]+(\\.[0-9]+)?$'
+        case when coalesce(m.capability_override->>'priceCurrency', 'USD') = 'USD'
+          and (m.capability_override->>'inputPricePerMillion') ~ '^[0-9]+(\\.[0-9]+)?$'
           then (m.capability_override->>'inputPricePerMillion')::numeric end as input_price,
-        case when (m.capability_override->>'outputPricePerMillion') ~ '^[0-9]+(\\.[0-9]+)?$'
+        case when coalesce(m.capability_override->>'priceCurrency', 'USD') = 'USD'
+          and (m.capability_override->>'outputPricePerMillion') ~ '^[0-9]+(\\.[0-9]+)?$'
           then (m.capability_override->>'outputPricePerMillion')::numeric end as output_price
       from period p join call_attempts a on p.request_id = a.request_id
       left join attempt_usage u on a.id = u.attempt_id

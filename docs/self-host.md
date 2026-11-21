@@ -28,6 +28,8 @@ Open `http://127.0.0.1:18089/ui/` and sign in with those credentials. The loopba
 
 Add a source through Model sources. Set a credential reference such as `MINATO_UPSTREAM_EXAMPLE` in the deployment environment and restart the worker after adding or rotating that value. Set the directory URL and the inference API base for the provider. A source can supply individual model endpoint and capability overrides through `PUT /admin/v1/sources/{id}/models/{encoded-model-id}`. Search for the original model ID from the provider directory and preserve its casing.
 
+Optional pricing fields can be set in the same model override. Use `inputPricePerMillion`, `outputPricePerMillion`, `cachedInputPricePerMillion` and `priceCurrency`. The usage page estimates USD cost from input and output prices when both values are configured.
+
 Create a project and environment in Projects, then issue an environment key. Register a feature without including any upstream credentials.
 
 ```bash
