@@ -2,9 +2,17 @@
 
 开发任务已按里程碑拆成独立文档。 [MVP Ticket 索引](tickets/README.md)
 
-下一步先打通一条可重复的本地业务链路。用 API 创建项目和环境，签发 Key，注册功能点，发布两个模拟模型，再用标准 OpenAI 客户端通过固定别名完成推理和回退。把这条链路跑通后，再接真实目录、审计持久化、管理界面和单次回放。
+Minato 要解决的是上游模型变化后，每个业务都要单独改配置的问题。业务在接入时登记功能点，声明预设模型和所需能力，后续一直使用固定别名。管理员在 Minato 查看各来源的模型目录，为功能点换模、设定备用模型和默认池。Go Runtime 执行路由和回退，Minato 记录实际用了哪个模型、消耗了多少 token，并提供调用审计和单次回放。
 
-LiteLLM `v1.85.0` 已用模拟上游验证 Responses、Chat 转换、流式终态用量、动态模型组和调用回调。默认回退会吞掉普通上游 `400`，因此 Minato 按错误类型选择备用，LiteLLM 负责每次上游调用和协议转换。Minato 的接口、数据库和运行时还待实现。 [本地兼容性验证](../tools/litellm-compat/README.md)
+## 当前优先级
+
+1. 以 LiteLLM 的 Python 实现为上游，在独立 Go 仓库固定源码版本，维护 Python 模块到 Go 实现的对应关系。第一条基线采用现有 Minato LiteLLM 镜像对应的 `v1.85.0`。 [Go 重写与上游跟踪](https://github.com/rquanx/minato-runtime/tree/main/upstream)
+2. 从已接入的 Chat Completions、Responses、Embeddings、流式响应及路由回退开始移植行为。用同一批模拟输入对照 Python 与 Go 的返回格式、错误、SSE 事件和用量，并记录各模块的兼容差异。
+3. 对照 LiteLLM 的后续版本检查 Python 源码和测试变化。逐项移植并验证后推进版本基线。用相同负载测量两套数据平面的内存。
+
+Minato 的真实上游接入是 Go 重写的集成验收。成本趋势保留为 Minato 产品功能。
+
+默认 Compose 已切换到 Go Runtime。模拟上游的端到端 Smoke 覆盖了注册、发布、回退、流式调用、审计和回放，真实上游仍需在当前默认链路上验收。以下里程碑保留初版实施记录，其中的 LiteLLM 条目属于早期验证和兼容模式。 [本地兼容性验证](../tools/litellm-compat/README.md)
 
 ## 里程碑
 
