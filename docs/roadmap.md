@@ -6,7 +6,7 @@ Minato 要解决的是上游模型变化后，每个业务都要单独改配置�
 
 ## 当前优先级
 
-1. 以 LiteLLM 的 Python 实现为上游，在独立 Go 仓库固定源码版本，维护 Python 模块到 Go 实现的对应关系。第一条基线采用现有 Minato LiteLLM 镜像对应的 `v1.85.0`。 [Go 重写与上游跟踪](https://github.com/rquanx/minato-runtime/tree/main/upstream)
+1. 以 LiteLLM 的 Python 实现为上游，在独立 Go 仓库固定源码版本，维护 Python 模块到 Go 实现或兼容层的对应关系。第一条基线采用现有 Minato LiteLLM 镜像对应的 `v1.85.0`。高频、常驻和内存敏感的数据平面使用 Go，长尾能力允许由固定版本的 LiteLLM 兼容层承接。 [全量迁移策略](litellm-migration-strategy.md) · [Go 重写与上游跟踪](https://github.com/rquanx/minato-runtime/tree/main/upstream)
 2. 从已接入的 Chat Completions、Responses、Embeddings、流式响应及路由回退开始移植行为。用同一批模拟输入对照 Python 与 Go 的返回格式、错误、SSE 事件和用量，并记录各模块的兼容差异。
 3. 对照 LiteLLM 的后续版本检查 Python 源码和测试变化。逐项移植并验证后推进版本基线。用相同负载测量两套数据平面的内存。
 
