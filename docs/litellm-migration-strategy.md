@@ -49,6 +49,8 @@ LiteLLM Dashboard 是 Next.js 静态导出，当前镜像中的构建目录约 2
 
 Go Runtime 的内存基线继续独立测量。兼容层的 Python 内存只计入启用兼容能力的部署，不把它作为所有实例的固定成本。
 
+仓库提供 `compose.hybrid.yaml`。它保持 Go Runtime 为默认数据平面，并以 Compose profile 按需启动固定版本 LiteLLM。兼容来源可以作为功能点候选顺序中的后备来源，因此不需要业务方修改注册 ID 或模型别名。
+
 ## 迁移顺序
 
 1. 为每个 LiteLLM route 和 provider 标记 `go`、`compat` 或 `both`。

@@ -1,0 +1,21 @@
+services:
+  # The default data plane remains the low-memory Go Runtime.
+  runtime:
+    profiles: [hybrid]
+  # LiteLLM is started only when a long-tail provider or compatibility route is needed.
+  litellm:
+    profiles: [hybrid]
+    image: ghcr.io/berriai/litellm:v1.85.0@sha256:2e8517e2bed423c50ab7e40fb1ac0a9cbe62a764e9d65161d871fb6a9bf75a2d
+    command: ["--config", "/fixture/litellm.yaml", "--host", "0.0.0.0", "--port", "4000"]
+    environment:
+      DATABASE_URL: ${LITELLM_DATABASE_URL:?Set LITELLM_DATABASE_URL in .env}
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:?Set LITELLM_MASTER_KEY in .env}
+      MINATO_CALLBACK_SECRET: ${MINATO_CALLBACK_SECRET:?Set MINATO_CALLBACK_SECRET in .env}
+      MINATO_CALLBACK_URL: http://minato:4101/internal/v1/litellm/usage
+      LITELLM_LOCAL_MODEL_COST_MAP: "True"
+      PYTHONDONTWRITEBYTECODE: "1"
+    volumes:
+      - ./deploy:/fixture:ro
+    depends_on:
+      postgres:
+        condition: service_healthy

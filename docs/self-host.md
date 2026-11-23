@@ -24,6 +24,18 @@ docker compose -f compose.yaml -f compose.litellm.yaml -f compose.litellm-admin.
 
 Open `http://127.0.0.1:18089/ui/` and sign in with those credentials. The loopback listener serves the LiteLLM Proxy, including the UI and the API routes the UI uses. Set `MINATO_DATA_PLANE=litellm` through the compatibility override when Minato should use it for inference.
 
+## Hybrid data plane
+
+The hybrid profile keeps the Go Runtime as Minato's default inference path and starts LiteLLM only for compatibility routes. It is useful while a long-tail provider or an uncommon LiteLLM endpoint is still being migrated. Start it with the normal Compose file and the hybrid override.
+
+```bash
+docker compose -f compose.yaml -f compose.hybrid.yaml --profile hybrid up -d --build
+```
+
+Register a compatibility source with its inference base URL set to `http://litellm:4000`. A feature can then choose a Go candidate first and the compatibility source as a later candidate. The request keeps the Minato project key, alias, audit record and usage attribution while LiteLLM handles the selected long-tail provider. The Go Runtime remains the default path for routes whose provider and endpoint are already covered.
+
+The hybrid file does not change `MINATO_DATA_PLANE` to `litellm`. The separate `compose.litellm.yaml` override remains available for a full Python compatibility deployment.
+
 ## Connect an application
 
 Add a source through Model sources. Set a credential reference such as `MINATO_UPSTREAM_EXAMPLE` in the deployment environment and restart the worker after adding or rotating that value. Set the directory URL and the inference API base for the provider. A source can supply individual model endpoint and capability overrides through `PUT /admin/v1/sources/{id}/models/{encoded-model-id}`. Search for the original model ID from the provider directory and preserve its casing.
