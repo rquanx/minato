@@ -11,15 +11,16 @@ export function runtimeConfig(env = process.env) {
     .split(",").map((value) => new URL(value.trim())).filter((value, index, values) => values.findIndex((item) => item.href === value.href) === index);
   const token = env.MINATO_RUNTIME_TOKEN;
   if (!token) throw new Error("MINATO_RUNTIME_TOKEN is required");
-  return { base, publishBases, headers: { authorization: `Bearer ${token}` } };
+  return { base, publishBases, headers: { authorization: `Bearer ${token}` },
+    publishHeaders: { authorization: `Bearer ${env.MINATO_RUNTIME_PUBLISH_TOKEN || token}` } };
 }
 
 export function createRuntime(env = process.env) {
-  const { base, publishBases, headers } = runtimeConfig(env);
+  const { publishBases, publishHeaders } = runtimeConfig(env);
   async function requestAt(target: URL, path: string, init: RequestInit = {}) {
     return fetch(new URL(path, target), {
       ...init,
-      headers: { ...headers, "content-type": "application/json", ...init.headers },
+      headers: { ...publishHeaders, "content-type": "application/json", ...init.headers },
       signal: init.signal ? AbortSignal.any([init.signal, AbortSignal.timeout(10_000)]) : AbortSignal.timeout(10_000),
       redirect: "error",
     });

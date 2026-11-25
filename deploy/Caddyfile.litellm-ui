@@ -1,0 +1,20 @@
+:8080 {
+	root * /srv/litellm
+	redir /ui /ui/ 308
+
+	handle_path /litellm-asset-prefix/* {
+		file_server
+	}
+	handle /_next/* {
+		file_server
+	}
+	handle_path /ui/* {
+		try_files {path} {path}/index.html {path}.html =404
+		file_server
+	}
+	handle {
+		reverse_proxy litellm:4000 {
+			flush_interval -1
+		}
+	}
+}

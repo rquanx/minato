@@ -10,7 +10,7 @@ Minato 的目标仍然是覆盖 LiteLLM Proxy 的完整公开能力。Go 重写�
 
 ### Go 核心数据平面
 
-固定放入 `minato-runtime`，保证常驻内存和延迟。
+由 `litellm-go` 提供。Minato 通过通用配置关闭所用部署的管理 API 和扩展供应商 API，并启用路由发布接口。
 
 - OpenAI、Responses、Chat Completions、Anthropic、Gemini 的常用协议转换
 - 路由、回退、重试、限流、健康检查和模型选择
@@ -28,20 +28,18 @@ Minato 的目标仍然是覆盖 LiteLLM Proxy 的完整公开能力。Go 重写�
 - Python 专属 tokenizer、格式转换和实验性 API
 - 迁移期间需要与 LiteLLM 原始行为逐项对照的能力
 
-兼容层使用固定的上游版本，首个基线为 LiteLLM `v1.85.0`。它不参与默认 Go 请求的常规路径，只有路由明确指定兼容能力或 Go 能力检查失败时才被选择。这样保留完整覆盖，同时避免每个 Minato 实例常驻 Python 内存。
+兼容层固定使用 LiteLLM `v1.85.0`。管理员将它登记为模型来源，通过目录、功能点候选和环境默认池决定适用的兼容模型。启用混合部署后，Python 服务常驻，多个 Go 实例可以共用一个兼容服务。
 
 ### LiteLLM Web UI 静态资源
 
-LiteLLM Dashboard 是 Next.js 静态导出，当前镜像中的构建目录约 21 MB。它可以由 Go Runtime、Caddy 或独立静态容器提供。静态资源不会产生 Python 常驻内存，但 UI 使用的 API 需要 Minato 提供 LiteLLM 兼容端点，或在兼容模式下指向 LiteLLM 管理层。
+LiteLLM Dashboard 使用原版 Next.js 静态导出，当前镜像中的构建目录约 21 MiB。`compose.hybrid-ui.yaml` 通过 Caddy 提供静态资源，登录和管理 API 由同源代理转发到 Python LiteLLM。
 
 ## 请求选择
 
-1. Minato 根据功能点、模型能力和发布版本选择 Go Runtime。
-2. Go Runtime 判断 provider、endpoint 和请求能力是否已覆盖。
-3. 已覆盖的请求直接由 Go 执行。
-4. 未覆盖但已登记兼容能力的请求转到 LiteLLM 兼容层。
-5. Go 和 Python 均返回统一的 request ID、attempt ID、model、provider、usage 和 cost 事件。
-6. 对同一请求不在两个数据平面之间无界重试。只有请求尚未向上游写出，且错误被标记为可迁移时才允许切换。
+1. 发布时，Minato 根据目录中的模型能力，把符合条件的直连模型和 LiteLLM 兼容模型编入同一份路由快照。
+2. Go Runtime 按候选顺序调用。首选收到 429 等可重试错误时，可切换到 Python 候选。流式响应开始输出后，当前请求沿用已选候选。
+3. Minato 接收 Go 返回的尝试记录，用同一业务请求 ID 关联模型、用量和审计，并按 Minato 中配置的模型价格估算成本。
+4. 来源停用或目录确认模型下架后，Minato 根据已发布的策略重算候选。环境默认池中的兼容模型可自动成为新首选。
 
 ## 内存与部署
 
@@ -49,7 +47,7 @@ LiteLLM Dashboard 是 Next.js 静态导出，当前镜像中的构建目录约 2
 
 Go Runtime 的内存基线继续独立测量。兼容层的 Python 内存只计入启用兼容能力的部署，不把它作为所有实例的固定成本。
 
-仓库提供 `compose.hybrid.yaml`。它保持 Go Runtime 为默认数据平面，并以 Compose profile 按需启动固定版本 LiteLLM。兼容来源可以作为功能点候选顺序中的后备来源，因此不需要业务方修改注册 ID 或模型别名。
+仓库提供 `compose.hybrid.yaml` 和可选的 Dashboard 覆盖文件。混合部署复用 Python 服务的原生 API。Minato 统一入口当前覆盖其现有推理接口，管理接口和其他 LiteLLM API 由兼容服务分别提供。 [部署说明](self-host.md#hybrid-data-plane)
 
 ## 迁移顺序
 

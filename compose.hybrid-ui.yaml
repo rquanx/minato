@@ -1,0 +1,14 @@
+services:
+  litellm:
+    environment:
+      UI_USERNAME: ${LITELLM_UI_USERNAME:-admin}
+      UI_PASSWORD: ${LITELLM_UI_PASSWORD:?Set LITELLM_UI_PASSWORD before enabling the LiteLLM admin UI}
+  litellm-ui:
+    profiles: [hybrid]
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile.litellm-ui
+    ports:
+      - "127.0.0.1:${LITELLM_UI_PORT:-18089}:8080"
+    depends_on:
+      - litellm

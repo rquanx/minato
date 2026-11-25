@@ -9,7 +9,10 @@ type CallDetails = { request_id: string; feature_id: string; endpoint: string; s
   attempts: Record<string, unknown>[]; alias: string };
 type Content = { state: string; content: { kind: string; state: string; value: any }[] };
 type Usage = { requestCount: number; attemptCount: number; unknownAttempts: number; knownTotalTokens: string;
-  costKnownAttempts?: number; estimatedCostUsd?: string };
+  costKnownAttempts: number; estimatedCostUsd: string;
+  costTrend: { date: string; costKnownAttempts: number; estimatedCostUsd: string | null }[] };
+
+const usd = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 8 });
 
 export function Calls({ environment, features, view, alert, replay }: {
   environment?: Environment; features: Feature[]; view: "usage" | "calls"; alert: (value: string) => void; replay: (item: Replay) => void;
@@ -61,8 +64,17 @@ export function Calls({ environment, features, view, alert, replay }: {
     {view === "usage" && usage && <div className="metrics">{[
       ["Requests", usage.requestCount], ["Attempts", usage.attemptCount],
       ["Known tokens", usage.knownTotalTokens], ["Usage unavailable", usage.unknownAttempts],
-      ["Estimated cost", usage.estimatedCostUsd ? `$${Number(usage.estimatedCostUsd).toFixed(4)}` : "Unknown"],
-    ].map(([label, value]) => <div key={label}><span>{label}</span><strong>{Number(value).toLocaleString()}</strong></div>)}</div>}
+      ["Estimated cost", usage.costKnownAttempts ? usd.format(Number(usage.estimatedCostUsd)) : "Unknown"],
+    ].map(([label, value]) => <div key={label}><span>{label}</span>
+      <strong>{label === "Estimated cost" ? value : Number(value).toLocaleString()}</strong></div>)}</div>}
+    {view === "usage" && usage && <Panel title="Daily estimated cost (UTC)">
+      {usage.costTrend.length ? <div className="table-scroll"><table>
+        <thead><tr><th>Date</th><th>Estimated cost</th><th>Priced attempts</th></tr></thead>
+        <tbody>{usage.costTrend.map((day) => <tr key={day.date}><td>{day.date}</td>
+          <td>{day.estimatedCostUsd === null ? "Unknown" : usd.format(Number(day.estimatedCostUsd))}</td>
+          <td>{day.costKnownAttempts.toLocaleString()}</td></tr>)}</tbody>
+      </table></div> : <Empty>Daily costs will appear here after this environment sends traffic.</Empty>}
+    </Panel>}
     <Panel title="Recent calls" action={<div className="actions">
       <select aria-label="Feature" value={feature} onChange={(event) => filter("featureId", event.target.value)}>
         <option value="">All features</option>

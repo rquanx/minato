@@ -104,11 +104,13 @@ function App() {
         <div className="breadcrumb"><span>Workspace</span><ChevronRight aria-hidden="true" size={14}/><span>{pages[page].label}</span></div>
         <div className="scope">
           <select aria-label="Project" value={projectId} onChange={(event) => {
+            if (event.target.value === projectId) return;
             refreshVersion.current++;
             setProjectId(event.target.value); setEnvironmentId(""); setReplay(undefined);
             setEnvironments([]); setFeatures([]);
           }}><option value="" disabled>Project</option>{projects.map((entry) => <option key={entry.id} value={entry.id}>{entry.displayName}</option>)}</select>
           <select aria-label="Environment" value={environmentId} onChange={(event) => {
+            if (event.target.value === environmentId) return;
             refreshVersion.current++; setEnvironmentId(event.target.value); setFeatures([]); setReplay(undefined);
           }}>
             <option value="" disabled>Environment</option>{environments.map((entry) => <option key={entry.id} value={entry.id}>{entry.displayName}</option>)}</select>

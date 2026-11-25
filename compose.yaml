@@ -8,6 +8,7 @@ x-minato: &minato
     MINATO_DATA_PLANE: runtime
     MINATO_RUNTIME_BASE_URL: http://runtime:4300
     MINATO_RUNTIME_TOKEN: ${MINATO_RUNTIME_TOKEN:?Set MINATO_RUNTIME_TOKEN in .env}
+    MINATO_RUNTIME_PUBLISH_TOKEN: ${MINATO_RUNTIME_PUBLISH_TOKEN:-${MINATO_RUNTIME_TOKEN}}
   depends_on:
     migrate:
       condition: service_completed_successfully
@@ -39,11 +40,15 @@ services:
   runtime:
     image: minato-runtime:local
     build:
-      context: ../minato-runtime
+      context: ${MINATO_RUNTIME_BUILD_CONTEXT:-../minato-runtime}
+      target: runtime
     env_file: ${MINATO_ENV_FILE:-.env}
     environment:
-      MINATO_RUNTIME_PORT: "4300"
-      MINATO_RUNTIME_TOKEN: ${MINATO_RUNTIME_TOKEN:?Set MINATO_RUNTIME_TOKEN in .env}
+      LITELLM_GO_MANAGEMENT_API: "false"
+      LITELLM_GO_PROVIDER_APIS: "false"
+      LITELLM_GO_PORT: "4300"
+      LITELLM_MASTER_KEY: ${MINATO_RUNTIME_TOKEN:?Set MINATO_RUNTIME_TOKEN in .env}
+      LITELLM_GO_ROUTE_PUBLICATION_TOKEN: ${MINATO_RUNTIME_PUBLISH_TOKEN:-${MINATO_RUNTIME_TOKEN}}
     restart: unless-stopped
 volumes:
   pgdata:

@@ -10,7 +10,13 @@ To use the bundled Caddy reverse proxy, add `-f compose.yaml -f compose.caddy.ya
 
 ## Go Runtime data plane
 
-The default deployment uses the low-memory Go Runtime. Minato publishes complete route snapshots to Runtime. Runtime performs upstream fallback and serves the OpenAI-compatible inference endpoints. The runtime image is built from the sibling `minato-runtime` checkout referenced by `compose.yaml`, so clone both repositories next to each other before building.
+Minato sets the gateway's `LITELLM_GO_MANAGEMENT_API` and `LITELLM_GO_PROVIDER_APIS` to `false` and enables route publication with `LITELLM_GO_ROUTE_PUBLICATION_TOKEN`. The gateway applies complete route snapshots and performs inference and fallback. Set `MINATO_RUNTIME_PUBLISH_TOKEN` to use a separate credential for publication. Compose uses `MINATO_RUNTIME_TOKEN` for inference and as the default publication credential. From the Minato repository root, clone the Runtime into the directory Compose expects.
+
+```bash
+git clone https://github.com/rquanx/litellm-go.git ../minato-runtime
+```
+
+If the Runtime is already checked out in another directory, set `MINATO_RUNTIME_BUILD_CONTEXT` to that directory in the Compose environment.
 
 For multiple Runtime replicas, keep `MINATO_RUNTIME_BASE_URL` pointed at the inference load balancer and set `MINATO_RUNTIME_PUBLISH_URLS` to the comma-separated internal URLs of every replica. Route publication succeeds only after every listed replica accepts the snapshot.
 
@@ -26,21 +32,27 @@ Open `http://127.0.0.1:18089/ui/` and sign in with those credentials. The loopba
 
 ## Hybrid data plane
 
-The hybrid profile keeps the Go Runtime as Minato's default inference path and starts LiteLLM only for compatibility routes. It is useful while a long-tail provider or an uncommon LiteLLM endpoint is still being migrated. Start it with the normal Compose file and the hybrid override.
+The hybrid profile adds a private LiteLLM service alongside Minato's Go Runtime. Configure `LITELLM_DATABASE_URL` with a separate PostgreSQL schema and set `LITELLM_MASTER_KEY`. Configure the compatibility model aliases in LiteLLM. For a custom YAML configuration, set `LITELLM_CONFIG_DIR` to a directory containing `litellm.yaml` and any modules it imports.
 
 ```bash
 docker compose -f compose.yaml -f compose.hybrid.yaml --profile hybrid up -d --build
 ```
 
-Register a compatibility source with its inference base URL set to `http://litellm:4000`. A feature can then choose a Go candidate first and the compatibility source as a later candidate. The request keeps the Minato project key, alias, audit record and usage attribution while LiteLLM handles the selected long-tail provider. The Go Runtime remains the default path for routes whose provider and endpoint are already covered.
+Register an OpenAI-compatible source with directory URL `http://litellm:4000/v1/models` and inference API base `http://litellm:4000/v1`. Set `MINATO_UPSTREAM_LITELLM` in the Minato and Runtime environment to a LiteLLM virtual key scoped to the compatibility aliases, then select that credential reference for the source. After catalog sync, add a listed alias to a feature's fallbacks or the environment's default pool and publish the route. Go retries eligible failures on the published candidates, and Minato republishes approved policies when source availability changes. Calls retain the business alias and Minato records both attempts and the returned usage. This path supports the inference endpoints exposed by Minato.
 
-The hybrid file does not change `MINATO_DATA_PLANE` to `litellm`. The separate `compose.litellm.yaml` override remains available for a full Python compatibility deployment.
+To open the upstream dashboard alongside Minato, set `LITELLM_UI_PASSWORD` and layer the static frontend override onto the hybrid configuration.
+
+```bash
+docker compose -f compose.yaml -f compose.hybrid.yaml -f compose.hybrid-ui.yaml --profile hybrid up -d --build
+```
+
+Open `http://127.0.0.1:18089/ui/`, or use the port set in `LITELLM_UI_PORT`. Caddy serves the pinned Dashboard export and forwards its login and administration API calls to the private LiteLLM service. The Minato console manages Minato projects, feature policies and call audits. The LiteLLM Dashboard manages the compatibility service and its own records.
 
 ## Connect an application
 
 Add a source through Model sources. Set a credential reference such as `MINATO_UPSTREAM_EXAMPLE` in the deployment environment and restart the worker after adding or rotating that value. Set the directory URL and the inference API base for the provider. A source can supply individual model endpoint and capability overrides through `PUT /admin/v1/sources/{id}/models/{encoded-model-id}`. Search for the original model ID from the provider directory and preserve its casing.
 
-Optional pricing fields can be set in the same model override. Use `inputPricePerMillion`, `outputPricePerMillion`, `cachedInputPricePerMillion` and `priceCurrency`. The usage page estimates USD cost from input and output prices when both values are configured.
+Optional pricing fields can be set in the same model override. Use `inputPricePerMillion`, `outputPricePerMillion`, `cachedInputPricePerMillion` and `priceCurrency`. The usage page estimates USD cost from input and output prices when both values are configured. It groups daily estimates by the UTC date of the call and shows how many attempts contributed to each estimate.
 
 Create a project and environment in Projects, then issue an environment key. Register a feature without including any upstream credentials.
 

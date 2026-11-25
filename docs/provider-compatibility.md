@@ -9,3 +9,9 @@ Validation used official LiteLLM `v1.85.0` and synthetic prompt text through the
 | OpenCode Zen | Configurable independent directory, base URL and credential, using the OpenAI-compatible adapter. | Per-model inference and context capabilities depend on the configured account. |
 
 The simulated fallback suite also verified JSON object conversion and session header forwarding. It exercises provider failure, version changes and failed-attempt usage separately from the live provider checks. [Reproduction commands](../tools/litellm-compat/README.md)
+
+## Default Go runtime acceptance
+
+On 2026-11-25, an isolated Minato and Go Runtime deployment synchronized an authenticated CLIProxyAPI model directory, registered a feature, published its route, and streamed a synthetic request through `/v1/responses`. The terminal event reported 18 tokens. PostgreSQL recorded an HTTP 200 attempt with the same token count and one audit record each for the request and response.
+
+OpenCode Go returned HTTP 401 on the authenticated model directory request with the available credential. The live OpenCode Go streaming and usage checks require a working credential. The Go runtime's fallback behavior is covered by the separate simulated upstream tests.

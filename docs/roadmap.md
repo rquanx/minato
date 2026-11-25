@@ -6,13 +6,13 @@ Minato 要解决的是上游模型变化后，每个业务都要单独改配置�
 
 ## 当前优先级
 
-1. 以 LiteLLM 的 Python 实现为上游，在独立 Go 仓库固定源码版本，维护 Python 模块到 Go 实现或兼容层的对应关系。第一条基线采用现有 Minato LiteLLM 镜像对应的 `v1.85.0`。高频、常驻和内存敏感的数据平面使用 Go，长尾能力允许由固定版本的 LiteLLM 兼容层承接。 [全量迁移策略](litellm-migration-strategy.md) · [Go 重写与上游跟踪](https://github.com/rquanx/minato-runtime/tree/main/upstream)
+1. 以 LiteLLM 的 Python 实现为上游，在独立 Go 仓库固定源码版本，维护 Python 模块到 Go 实现或兼容层的对应关系。第一条基线采用现有 Minato LiteLLM 镜像对应的 `v1.85.0`。高频、常驻和内存敏感的数据平面使用 Go，长尾能力允许由固定版本的 LiteLLM 兼容层承接。 [全量迁移策略](litellm-migration-strategy.md) · [Go 重写与上游跟踪](https://github.com/rquanx/litellm-go/tree/main/upstream)
 2. 从已接入的 Chat Completions、Responses、Embeddings、流式响应及路由回退开始移植行为。用同一批模拟输入对照 Python 与 Go 的返回格式、错误、SSE 事件和用量，并记录各模块的兼容差异。
 3. 对照 LiteLLM 的后续版本检查 Python 源码和测试变化。逐项移植并验证后推进版本基线。用相同负载测量两套数据平面的内存。
 
 Minato 的真实上游接入是 Go 重写的集成验收。成本趋势保留为 Minato 产品功能。
 
-默认 Compose 已切换到 Go Runtime。模拟上游的端到端 Smoke 覆盖了注册、发布、回退、流式调用、审计和回放，真实上游仍需在当前默认链路上验收。以下里程碑保留初版实施记录，其中的 LiteLLM 条目属于早期验证和兼容模式。 [本地兼容性验证](../tools/litellm-compat/README.md)
+默认 Compose 已切换到 Go Runtime。模拟上游的端到端 Smoke 覆盖注册、发布、回退、流式调用、审计和回放。真实 CPA 已通过默认链路的目录同步、路由发布、流式调用、用量和审计验收。OpenCode Go 的目录请求返回 401，待凭证恢复后继续验收。以下里程碑保留初版实施记录。 [供应商验收](provider-compatibility.md#default-go-runtime-acceptance) · [本地兼容性验证](../tools/litellm-compat/README.md)
 
 ## 里程碑
 

@@ -21,3 +21,28 @@ docker compose -p minato-litellm-check down
 | 回调关联 | 使用检查脚本打印的 `trace` 查询 `FIXTURE_EVENT`，同一个 `litellm_call_id` 有首选失败和备用成功两条事件。首选没有上报 token，备用回调上报 12 |
 
 Minato 首版使用 LiteLLM 执行协议转换与上游调用，由推理入口按指定错误类型选择下一候选。兼容性验证覆盖模拟协议和发布原语。真实上游、流式中断采集、审计持久化和 Minato 生效版本事务列入后续集成验收。
+## Hybrid deployment smoke
+
+Use an isolated Compose project and a fresh environment file based on `.env.compose.example`. Set `MINATO_PUBLIC_ORIGIN=http://127.0.0.1:18088`, `MINATO_PUBLIC_PORT=18088`, `MINATO_UPSTREAM_RELEASE_FIXTURE=fixture-provider`, and `MINATO_UPSTREAM_LITELLM` to the fixture's `LITELLM_MASTER_KEY`. Set `LITELLM_UI_PASSWORD` for dashboard login. The fixture alias `compat-fixture` forwards to the mock upstream.
+
+Run from the Minato repository root.
+
+```bash
+export MINATO_ENV_FILE=.env.hybrid-smoke
+docker compose --env-file "$MINATO_ENV_FILE" -p minato-hybrid-smoke \
+  -f compose.yaml -f compose.hybrid.yaml -f compose.hybrid-ui.yaml \
+  -f tools/litellm-compat/hybrid.yaml --profile hybrid up -d --build
+```
+
+Set `MINATO_SMOKE_PASSWORD` and `MINATO_SMOKE_LITELLM_UI_PASSWORD` to the fixture passwords before running the smoke test.
+
+```bash
+MINATO_SMOKE_FIXTURE=http://fixture:18765 \
+MINATO_SMOKE_LITELLM_BASE=http://litellm:4000/v1 \
+MINATO_SMOKE_LITELLM_UI_ORIGIN=http://127.0.0.1:18089 \
+  bun tools/deployment-smoke.ts
+```
+
+The smoke test verifies dashboard assets and login, catalog synchronization, Go-to-Python fallback on HTTP 429, streaming and JSON usage, estimated cost and audit capture. It also disables the synthetic primary source and checks that the approved route is republished to Python under the same business alias.
+
+On Docker Desktop, `docker stats --no-stream` after the smoke test reported 6.2 MiB for Go Runtime, 985 MiB for LiteLLM, 13.5 MiB for the Dashboard server, 71 MiB for Minato and 93 MiB for PostgreSQL. With LiteLLM and the Dashboard stopped, the regular deployment smoke passed and the remaining three services used about 160 MiB combined. These are post-test snapshots of a synthetic workload. A separate snapshot during Python startup showed 1.83 GiB for the LiteLLM container.

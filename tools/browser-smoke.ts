@@ -14,8 +14,9 @@ try {
   await page.getByRole("button", { name: "Open console" }).click();
   await page.getByRole("heading", { name: "Projects", exact: true }).waitFor();
   const project = page.getByLabel("Project", { exact: true });
-  await project.getByRole("option", { name: "Release sample", exact: true }).first().waitFor({ state: "attached" });
-  const releaseId = await project.getByRole("option", { name: "Release sample", exact: true }).first().getAttribute("value");
+  const releaseProject = project.getByRole("option", { name: process.env.MINATO_SMOKE_PROJECT_NAME ?? "Release sample", exact: true }).first();
+  await releaseProject.waitFor({ state: "attached" });
+  const releaseId = await releaseProject.getAttribute("value");
   assert(releaseId);
   await project.selectOption(releaseId);
   const environment = page.getByLabel("Environment", { exact: true });
@@ -49,15 +50,27 @@ try {
   await environment.selectOption(releaseEnvironment);
   await page.getByRole("button", { name: "Usage", exact: true }).click();
   await page.getByText("Known tokens", { exact: true }).waitFor();
-  await page.getByRole("button", { name: /Open call/ }).first().click();
+  await page.getByRole("heading", { name: "Daily estimated cost (UTC)" }).waitFor();
+  if (process.env.MINATO_SMOKE_EXPECT_PRICED_USAGE === "true") {
+    await page.getByRole("cell", { name: /^\$0\.0*[1-9]/ }).first().waitFor();
+  }
+  await page.getByLabel("Call type").selectOption("production");
+  await page.getByRole("row").filter({ hasText: "production" }).last().getByRole("button", { name: /Open call/ }).click();
   await page.getByRole("button", { name: "Copy prompt", exact: true }).click();
   await page.getByRole("button", { name: "Copied", exact: true }).waitFor();
   const clipboard = await page.evaluate(() => navigator.clipboard.readText());
   assert.equal(clipboard, "Synthetic deployment sample.");
-  await page.getByRole("button", { name: "Tests", exact: true }).click();
-  await page.getByRole("heading", { name: "New test", exact: true }).waitFor();
-  assert.match(await page.getByRole("main").innerText(), /Run test/);
-  console.log("Verified browser login, project/environment creation, environment keys, source sync, usage drilldown, clipboard and test editor.");
+  await page.getByRole("button", { name: "Replay", exact: true }).click();
+  await page.getByRole("heading", { name: "Replay request", exact: true }).waitFor();
+  const replayCreated = page.waitForResponse((response) => response.request().method() === "POST" &&
+    /\/environments\/[^/]+\/tests$/.test(new URL(response.url()).pathname));
+  await page.getByRole("button", { name: "Run test", exact: true }).click();
+  const replayResponse = await replayCreated;
+  assert.equal(replayResponse.status(), 202, await replayResponse.text());
+  await page.getByText("succeeded", { exact: true }).waitFor();
+  await page.getByRole("heading", { name: "Original response", exact: true }).waitFor();
+  await page.getByRole("heading", { name: "Test response", exact: true }).waitFor();
+  console.log("Verified browser login, project/environment creation, environment keys, source sync, cost trends, clipboard and replay.");
 } finally {
   await browser.close();
 }
