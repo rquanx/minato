@@ -22,3 +22,7 @@ Minato 是自托管 LLM 控制平面。业务按「项目 → 环境 → 功能�
 自托管安装使用 `bun tools/prepare-runtime.ts` 获取固定版本的 Go Runtime，再由 Compose 构建并启动。Runtime 保存内存路由快照，Minato 负责项目、模型目录、路由版本、审计和用量归因。LiteLLM 兼容模式通过 `compose.litellm.yaml` 单独启用。
 
 多副本 Runtime 可以将 `MINATO_RUNTIME_PUBLISH_URLS` 设置为逗号分隔的内部地址。Minato 会把每个路由版本发布到所有节点，推理请求继续通过 `MINATO_RUNTIME_BASE_URL` 访问负载均衡入口。
+
+## 许可证
+
+Minato 采用 MIT 许可证。[LICENSE](LICENSE)
