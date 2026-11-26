@@ -1,9 +1,11 @@
 import { z } from "zod";
+import { endpointPaths } from "./endpoints";
+export { endpointPaths, runtimeOnlyEndpoint, uploadEndpoints } from "./endpoints";
 
 export const slug = z.string().regex(/^[a-z0-9](?:[a-z0-9-]{0,46}[a-z0-9])?$/);
 export const uuid = z.uuid();
 export const displayName = z.string().trim().min(1).max(160);
-export const endpoint = z.enum(["responses", "chat-completions", "embeddings"]);
+export const endpoint = z.enum(Object.keys(endpointPaths) as (keyof typeof endpointPaths)[]);
 export const namedResource = z.strictObject({ slug, displayName });
 export const modelReference = z.strictObject({
   sourceId: z.string().min(1).max(160),
@@ -18,6 +20,8 @@ export const featureDeclaration = z.strictObject({
     structuredOutput: z.enum(["json_object", "json_schema"]).optional(),
     streaming: z.boolean().optional(),
     tools: z.boolean().optional(),
+    embeddingSpace: z.string().trim().min(1).max(160).optional(),
+    embeddingDimensions: z.number().int().positive().optional(),
   }),
 });
 

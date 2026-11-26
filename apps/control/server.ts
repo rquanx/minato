@@ -10,6 +10,8 @@ import { registerCatalog } from "./catalog";
 import { registerAudit, registerUsageCallback } from "./audit";
 import { registerTests } from "./tests";
 import { authorizeMember, registerMembers } from "./members";
+import { registerDashboardSettings } from "./dashboard";
+import { registerNotifications } from "./notifications";
 
 export function registerControl(app: FastifyInstance, db: Database, env: NodeJS.ProcessEnv) {
   const password = env.MINATO_ADMIN_PASSWORD;
@@ -68,10 +70,12 @@ export function registerControl(app: FastifyInstance, db: Database, env: NodeJS.
   registerProjects(app, db, auth);
   registerFeatures(app, db, auth);
   registerRoutes(app, db);
-  registerCatalog(app, db);
+  registerCatalog(app, db, env, auth);
   registerAudit(app, db, env);
   registerTests(app, db, env);
   registerMembers(app, db);
+  registerDashboardSettings(app, db, auth, env);
+  registerNotifications(app, db, env);
   const webDirectory = new URL("../web/dist/", import.meta.url);
   app.get("/", async (_request, reply) => {
     const index = Bun.file(new URL("index.html", webDirectory));

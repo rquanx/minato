@@ -4,6 +4,7 @@ import { ApiError } from "../packages/contracts";
 import { connectDatabase } from "../packages/db/client";
 import { registerUsageCallback } from "./control/audit";
 import { registerControl } from "./control/server";
+import { createDashboardListener } from "./control/dashboard";
 import { registerIngress } from "./ingress/server";
 import { startWorker } from "./worker/runner";
 
@@ -15,6 +16,7 @@ const app = Fastify({
   disableRequestLogging: true,
 });
 const callbacks = Fastify({ bodyLimit: 16 * 1024 });
+const dashboard = createDashboardListener(db, env);
 app.register(async (scope) => registerControl(scope, db, env));
 app.register(async (scope) => registerIngress(scope, db, env));
 registerUsageCallback(callbacks, db, env);
@@ -32,7 +34,7 @@ function close() {
     try {
       await Promise.allSettled([app.close(), stopWorker?.()]);
     } finally {
-      try { await callbacks.close(); }
+      try { await Promise.allSettled([callbacks.close(), dashboard?.close()]); }
       finally { await db.close(); }
     }
   })();
@@ -43,6 +45,7 @@ try {
     port: Number(env.MINATO_CALLBACK_PORT ?? 4101),
   });
   await app.listen({ host: env.MINATO_HOST ?? "127.0.0.1", port: Number(env.MINATO_PORT ?? 4100) });
+  await dashboard?.listen({ host: env.MINATO_HOST ?? "127.0.0.1", port: Number(env.MINATO_DASHBOARD_PORT ?? 4102) });
   stopWorker = startWorker(db, env, (job) => app.log.error({ job }, "Background job failed"));
   process.once("SIGINT", () => void close());
   process.once("SIGTERM", () => void close());

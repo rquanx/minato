@@ -1,17 +1,33 @@
 import { useEffect, useState } from "react";
-import { ArrowDown, ArrowUp, KeyRound, Plus, RotateCcw, Send, Trash2 } from "lucide-react";
-import { api, message, pretty, type Environment, type Feature, type ModelRef, type Project, type Source } from "./api";
-import { Copy, Empty, Fields, Panel, State, value } from "./components";
+import { KeyRound, Plus, Trash2 } from "lucide-react";
+import { api, message, type Environment, type Feature, type ModelRef, type Project, type Source } from "./api";
+import { Button, Copy, Drawer, Empty, Field, Fields, Input, Notice, Pagination, Panel, Sections, State, Table, Toggle, usePage, value } from "./components";
+
+import { RouteEditor } from "./route-editor";
+import { ModelSelector } from "./model-selector";
+import { Administration } from "./administration";
 
 type Props = { project?: Project; environment?: Environment; features: Feature[];
   sources: Source[]; refresh: () => Promise<void>; alert: (text: string) => void };
 type Key = { id: string; label: string; revokedAt?: string; expiresAt?: string };
-type Policy = { primary?: ModelRef; fallbacks: ModelRef[] };
-type Version = { version: string; state: string; errorCode?: string };
+
+
+const projectSections = [{ id: "routing", label: "Feature routing" }, { id: "defaults", label: "Default models" },
+  { id: "keys", label: "Environment keys" }, { id: "audit", label: "Content audit" }, { id: "management", label: "Manage" }] as const;
 
 export function Projects({ project, environment, features, sources, refresh, alert }: Props) {
   const [keys, setKeys] = useState<Key[]>([]);
   const [secret, setSecret] = useState("");
+  const [section, setSection] = useState<(typeof projectSections)[number]["id"]>("routing");
+  const [create, setCreate] = useState<"project" | "environment">();
+  const [editing, setEditing] = useState("");
+  const [drawerNotice, setDrawerNotice] = useState("");
+  const [revoking, setRevoking] = useState<Key>();
+  const [revokePending, setRevokePending] = useState(false);
+  const [settingsError, setSettingsError] = useState("");
+  const selected = features.find((feature) => feature.id === editing);
+  const featurePage = usePage(features);
+  const keyPage = usePage(keys);
   const [audit, setAudit] = useState<{ enabled: boolean; revision: number; retentionDays: number; contentLimit: number; redactKeys: string[] }>();
   async function loadEnvironment(activeProject = project, activeEnv = environment) {
     if (!activeProject || !activeEnv) return;
@@ -21,169 +37,148 @@ export function Projects({ project, environment, features, sources, refresh, ale
     ]);
     setKeys(records);
     setAudit(policy);
+    setSettingsError("");
   }
   useEffect(() => {
     setSecret("");
     setAudit(undefined);
     setKeys([]);
-    void loadEnvironment().catch((error) => alert(message(error)));
+    setSettingsError("");
+    void loadEnvironment().catch((error) => setSettingsError(message(error)));
   }, [environment?.id]);
+  function retrySettings() {
+    setSettingsError("");
+    void loadEnvironment().catch((error) => setSettingsError(message(error)));
+  }
   const prefix = project && environment ? `/projects/${project.slug}/environments/${environment.slug}` : "";
   return <div className="page-stack">
-    <div className="columns">
-      <Panel title="Create project"><Fields label="Create project" alert={alert} submit={async (form) => {
-        await api("/projects", "POST", { slug: value(form, "slug"), displayName: value(form, "name") }); await refresh();
-      }}><label>Project slug<input name="slug" required placeholder="demo-app"/></label>
-        <label>Display name<input name="name" required placeholder="Demo application"/></label></Fields></Panel>
-      <Panel title="Create environment">{project ?
-        <Fields label="Create environment" alert={alert} submit={async (form) => {
-          await api(`/projects/${project.slug}/environments`, "POST", { slug: value(form, "slug"), displayName: value(form, "name") }); await refresh();
-        }}><label>Environment slug<input name="slug" required placeholder="production"/></label>
-          <label>Display name<input name="name" required placeholder="Production"/></label></Fields> : <Empty>Select a project first.</Empty>}</Panel>
+    <div className="toolbar">
+      <Button variant="secondary" disabled={!project} onClick={() => { setDrawerNotice(""); setCreate("environment"); }}>New environment</Button>
+      <Button onClick={() => { setDrawerNotice(""); setCreate("project"); }}><Plus size={16}/> New project</Button>
     </div>
-    {environment && <><div className="columns">
+    {create && <Drawer title={create === "project" ? "Create project" : "Create environment"} close={() => setCreate(undefined)}>
+      {drawerNotice && <Notice tone="error" clear={() => setDrawerNotice("")}>{drawerNotice}</Notice>}
+      <Fields label={create === "project" ? "Create project" : "Create environment"} alert={setDrawerNotice} submit={async (form) => {
+        const path = create === "project" ? "/projects" : `/projects/${project!.slug}/environments`;
+        await api(path, "POST", { slug: value(form, "slug"), displayName: value(form, "name") });
+        await refresh(); setCreate(undefined);
+      }}><Field label={create === "project" ? "Project slug" : "Environment slug"}>{(props) =>
+        <Input {...props} name="slug" required placeholder={create === "project" ? "demo-app" : "production"}/>}</Field>
+        <Field label="Display name">{(props) => <Input {...props} name="name" required/>}</Field>
+      </Fields>
+    </Drawer>}
+    {!environment && section !== "management" && <Empty>{project ? "Create an environment to configure routes and keys." : "Create a project to get started."}</Empty>}
+    <Sections items={environment ? projectSections : projectSections.filter((entry) => entry.id === "routing" || entry.id === "management")}
+      active={section} onChange={setSection} label="Project sections"/>
+    {section === "management" && <Administration project={project} environment={environment} refresh={refresh}/>}
+    {environment && <>
+      {section === "keys" &&
       <Panel title="Environment keys">
         <Fields label="Issue key" alert={alert} submit={async (form) => {
           const key = await api<Key & { key: string }>(prefix + "/keys", "POST", { label: value(form, "label") });
           setSecret(key.key); await loadEnvironment();
-        }}><label>Key label<input name="label" required placeholder="Application server"/></label></Fields>
-        {secret && <div className="secret"><code>{secret}</code><Copy text={secret}>Copy key</Copy></div>}
-        <ul className="row-list">{keys.map((key) => <li key={key.id}><KeyRound size={15}/><span>{key.label}</span>
+        }}><Field label="Key label">{(props) => <Input {...props} name="label" required placeholder="Application server"/>}</Field></Fields>
+        {secret && <div className="secret"><p>Copy this key now. It is shown only once.</p>
+          <code>{secret}</code><div className="actions"><Copy text={secret}>Copy key</Copy>
+            <Button variant="secondary" onClick={() => setSecret("")}>Hide key</Button></div></div>}
+        {keys.length ? <ul className="row-list">{keyPage.items.map((key) => <li key={key.id}><KeyRound size={16} aria-hidden="true"/><span>{key.label}</span>
           <State value={key.revokedAt ? "revoked" : "active"}/>
-          {!key.revokedAt && <button type="button" className="icon" aria-label={`Revoke ${key.label}`} onClick={async () => {
-            if (!window.confirm(`Revoke ${key.label}?`)) return;
-            try { await api(prefix + "/keys/" + key.id, "DELETE"); await loadEnvironment(); } catch (error) { alert(message(error)); }
-          }}><Trash2 size={16}/></button>}</li>)}</ul>
-      </Panel>
-      <Panel title="Content audit">{audit && <Fields key={audit.revision + "-" + environment.id} label="Save audit policy" alert={alert} submit={async (form) => {
+          {!key.revokedAt && <Button variant="icon" title="Revoke key" aria-label={`Revoke ${key.label}`}
+            onClick={() => { setDrawerNotice(""); setRevoking(key); }}><Trash2 size={16} aria-hidden="true"/></Button>}</li>)}</ul>
+          : audit ? <Empty>No environment keys have been issued.</Empty>
+          : settingsError ? <Empty state="error" retry={retrySettings}>{settingsError}</Empty>
+          : <Empty state="loading">Loading environment keys…</Empty>}
+        {keys.length > 10 && <Pagination {...keyPage.controls}/>}
+      </Panel>}
+      {section === "audit" && <Panel title="Content audit">{audit && <Fields key={audit.revision + "-" + environment.id} label="Save audit policy" alert={alert} submit={async (form) => {
         await api(`/environments/${environment.id}/audit-policy`, "PUT", {
           expectedRevision: audit.revision, enabled: form.has("enabled"), retentionDays: Number(form.get("days")),
           contentLimit: audit.contentLimit, redactKeys: value(form, "redact").split(",").map((part) => part.trim()).filter(Boolean),
         }); await loadEnvironment();
-      }}><label className="toggle"><input type="checkbox" name="enabled" defaultChecked={audit.enabled}/> Store request and response content</label>
-        <label>Retention in days<input type="number" name="days" min="1" max="90" required defaultValue={audit.retentionDays}/></label>
-        <label>Fields to redact <input name="redact" defaultValue={audit.redactKeys.join(", ")} placeholder="customer_id, email"/></label>
-      </Fields>}</Panel>
-    </div>
-    <DefaultPool environmentId={environment.id} sources={sources} alert={alert}/>
-    <Panel title="Feature routing">{features.length ? features.map((feature) => <RouteEditor key={feature.id} feature={feature} sources={sources}
-      refresh={refresh} alert={alert}/>) : <Empty>Register a feature with an environment key to configure a route.</Empty>}</Panel></>}
+      }}><Toggle name="enabled" defaultChecked={audit.enabled} label="Store request and response content"/>
+        <Field label="Retention in days">{(props) => <Input {...props} type="number" name="days" min="1" max="90" required defaultValue={audit.retentionDays}/>}</Field>
+        <Field label="Fields to redact">{(props) => <Input {...props} name="redact" defaultValue={audit.redactKeys.join(", ")} placeholder="customer_id, email"/>}</Field>
+      </Fields>}{!audit && (settingsError ? <Empty state="error" retry={retrySettings}>{settingsError}</Empty>
+        : <Empty state="loading">Loading audit policy…</Empty>)}</Panel>}
+      {revoking && <Drawer kind="confirmation" busy={revokePending} title="Revoke environment key" close={() => setRevoking(undefined)}>
+        <p>Applications using <strong>{revoking.label}</strong> will lose access immediately.</p>
+        {drawerNotice && <Notice tone="error">{drawerNotice}</Notice>}
+        <div className="actions confirmation-actions">
+          <Button variant="secondary" disabled={revokePending} onClick={() => setRevoking(undefined)}>Cancel</Button>
+          <Button variant="danger" disabled={revokePending} onClick={async () => {
+            setRevokePending(true); setDrawerNotice("");
+            try {
+              await api(prefix + "/keys/" + revoking.id, "DELETE");
+              setRevoking(undefined);
+              await loadEnvironment().catch((error) => alert(message(error)));
+            } catch (error) { setDrawerNotice(message(error)); }
+            finally { setRevokePending(false); }
+          }}>{revokePending ? "Revoking…" : "Revoke key"}</Button>
+        </div>
+      </Drawer>}
+      {section === "defaults" && <DefaultPool environmentId={environment.id} sources={sources} alert={alert}/>}
+      {section === "routing" && <Panel title="Feature routing">{features.length ? <>
+        <Table label="Feature routes"><thead><tr><th>Feature</th><th>Serving model</th><th>Route</th><th aria-label="Edit"/></tr></thead>
+          <tbody>{featurePage.items.map((feature) => <tr key={feature.id}>
+            <td>{feature.declaration.displayName}<small>{feature.alias}</small></td>
+            <td>{feature.unavailable ? "—" : feature.activeModels?.[0]?.modelId ?? "—"}</td>
+            <td><State value={feature.unavailable ? "unavailable" : feature.activeRouteVersion ? "active" : "pending"}/>
+              {feature.routeReason && <small>{feature.routeReason.replaceAll("_", " ")}</small>}
+              {feature.desiredRouteVersion !== feature.activeRouteVersion && feature.desiredRouteState && <small>Publication {feature.desiredRouteState}</small>}</td>
+            <td><Button variant="secondary" onClick={() => { setDrawerNotice(""); setEditing(feature.id); }}>Configure</Button></td>
+          </tr>)}</tbody></Table>
+        {features.length > 10 && <Pagination {...featurePage.controls}/>}
+      </> : <Empty>Register a feature with an environment key to configure a route.</Empty>}</Panel>}
+      {selected && <Drawer title={selected.declaration.displayName} close={() => setEditing("")}>
+        {drawerNotice && <Notice clear={() => setDrawerNotice("")}>{drawerNotice}</Notice>}
+        <RouteEditor key={selected.id} feature={selected} sources={sources} refresh={refresh}/>
+      </Drawer>}
+    </>}
   </div>;
 }
 
 function DefaultPool({ environmentId, sources, alert }: { environmentId: string; sources: Source[]; alert: (text: string) => void }) {
   const [pool, setPool] = useState<ModelRef[]>([]);
+  const [autoPublish, setAutoPublish] = useState<boolean>();
+  const [saving, setSaving] = useState(false);
   const url = `/environments/${environmentId}/defaults`;
   useEffect(() => {
     let current = true;
-    void api<{ pool: ModelRef[] }>(url).then((value) => { if (current) setPool(value.pool); })
+    void api<{ pool: ModelRef[]; autoPublish: boolean }>(url).then((value) => {
+      if (current) { setPool(value.pool); setAutoPublish(value.autoPublish); }
+    })
       .catch((error) => { if (current) alert(message(error)); });
     return () => { current = false; };
   }, [url]);
   return <Panel title="Default model pool">
     <div className="route-options">
+      {autoPublish !== undefined && <Toggle kind="switch" label="Automatically publish newly registered features"
+        checked={autoPublish} disabled={saving} onChange={async (event) => {
+          const enabled = event.target.checked;
+          setSaving(true);
+          try {
+            const result = await api<{ autoPublish: boolean }>(`/environments/${environmentId}/auto-publish`, "PUT", { enabled });
+            setAutoPublish(result.autoPublish);
+          } catch (error) { alert(message(error)); }
+          finally { setSaving(false); }
+        }}/>}
       {pool.map((model, index) => <div key={index} className="route-row">
         <ModelSelector label={`Default ${index + 1}`} sources={sources} model={model} onChange={(change) => {
           if (change) setPool((previous) => previous.map((entry, i) => i === index ? change : entry));
         }}/>
-        <button className="icon" aria-label="Remove default model" onClick={() => setPool((previous) => previous.filter((_, i) => i !== index))}>
+        <Button variant="icon" aria-label="Remove default model" onClick={() => setPool((previous) => previous.filter((_, i) => i !== index))}>
           <Trash2 size={16}/>
-        </button>
+        </Button>
       </div>)}
       <div className="actions">
-        <button className="button secondary" onClick={() => setPool((previous) => [...previous, { sourceId: "", modelId: "" }])}>
+        <Button variant="secondary" onClick={() => setPool((previous) => [...previous, { sourceId: "", modelId: "" }])}>
           <Plus size={16}/> Add default model
-        </button>
-        <button className="button" disabled={pool.some((model) => !model.modelId)} onClick={async () => {
+        </Button>
+        <Button disabled={pool.some((model) => !model.modelId)} onClick={async () => {
           try { await api(url, "PUT", { pool }); alert("Default model pool saved."); }
           catch (error) { alert(message(error)); }
-        }}>Save default pool</button>
+        }}>Save default pool</Button>
       </div>
     </div>
   </Panel>;
-}
-
-function RouteEditor({ feature, sources, refresh, alert }: { feature: Feature; sources: Source[]; refresh: () => Promise<void>; alert: (text: string) => void }) {
-  const [policy, setPolicy] = useState<Policy>({ primary: feature.routingPolicy?.primary, fallbacks: feature.routingPolicy?.fallbacks ?? [] });
-  const [preview, setPreview] = useState<unknown>();
-  const [versions, setVersions] = useState<Version[]>([]);
-  const [opened, setOpened] = useState(false);
-  const [rollback, setRollback] = useState("");
-  const url = `/features/${feature.id}/routing`;
-  async function updateVersions() { setVersions(await api<Version[]>(url + "/versions")); }
-  useEffect(() => {
-    if (!opened) return;
-    const timer = setInterval(() => void updateVersions().catch(() => undefined), 2000);
-    void updateVersions().catch((error) => alert(message(error)));
-    return () => clearInterval(timer);
-  }, [opened, url]);
-  return <details onToggle={(event) => setOpened(event.currentTarget.open)} className="route">
-    <summary><span>{feature.declaration.displayName}<code>{feature.alias}</code></span><State value={feature.activeRouteVersion ? "active" : "pending"}/></summary>
-    <div className="route-body">
-      <Copy text={feature.alias}>Copy alias</Copy>
-      <div className="route-options">
-        <ModelSelector label="Primary override" sources={sources} model={policy.primary} onChange={(primary) => setPolicy({ ...policy, primary })}/>
-        {policy.fallbacks.map((model, index) => <div className="route-row" key={index}>
-          <ModelSelector label={`Fallback ${index + 1}`} sources={sources} model={model} onChange={(entry) => {
-            const fallbacks = policy.fallbacks.slice();
-            if (entry) fallbacks[index] = entry;
-            else fallbacks.splice(index, 1);
-            setPolicy({ ...policy, fallbacks });
-          }}/>
-          {[-1, 1].map((offset) => <button key={offset} className="icon" aria-label={offset < 0 ? "Move fallback up" : "Move fallback down"}
-            disabled={index + offset < 0 || index + offset >= policy.fallbacks.length} onClick={() => {
-              const fallbacks = policy.fallbacks.slice();
-              [fallbacks[index], fallbacks[index + offset]] = [fallbacks[index + offset], fallbacks[index]];
-              setPolicy({ ...policy, fallbacks });
-            }}>{offset < 0 ? <ArrowUp size={16}/> : <ArrowDown size={16}/>}</button>)}
-          <button className="icon" aria-label="Remove fallback" onClick={() => setPolicy({ ...policy, fallbacks: policy.fallbacks.filter((_, i) => index !== i) })}><Trash2 size={16}/></button>
-        </div>)}
-        <button type="button" className="button secondary" onClick={() => setPolicy({ ...policy, fallbacks: [...policy.fallbacks, { sourceId: "", modelId: "" }] })}><Plus size={16}/> Add fallback</button>
-      </div>
-      <div className="actions">
-        <button className="button secondary" onClick={async () => {
-          try {
-            await api(url, "PUT", { expectedRevision: feature.draftRevision, policy });
-            setPreview(await api(url + "/preview", "POST")); await refresh();
-          } catch (error) { alert(message(error)); }
-        }}>Save and preview</button>
-        <button className="button" onClick={async () => {
-          try { await api(url + "/publish", "POST", { expectedRevision: feature.draftRevision }); await updateVersions(); await refresh(); }
-          catch (error) { alert(message(error)); }
-        }}><Send size={15}/> Publish saved route</button>
-      </div>
-      {preview !== undefined && <pre>{pretty(preview)}</pre>}
-      <p>Serving version {versions.find((version) => version.state === "active")?.version ?? "—"}</p>
-      <ul className="row-list">{versions.slice(0, 4).map((version) => <li key={version.version}>Version {version.version}<State value={version.state}/>{version.errorCode}</li>)}</ul>
-      <div className="actions"><select value={rollback} aria-label="Previous route version" onChange={(event) => setRollback(event.target.value)}>
-        <option value="">Previous route version</option>{versions.filter((entry) => entry.state === "active").map((entry) => <option key={entry.version} value={entry.version}>{entry.version}</option>)}
-      </select><button className="button secondary" disabled={!rollback || !feature.activeRouteVersion} onClick={async () => {
-        try { await api(url + "/rollback", "POST", { version: rollback, expectedActiveVersion: feature.activeRouteVersion }); await updateVersions(); await refresh(); }
-        catch (error) { alert(message(error)); }
-      }}><RotateCcw size={15}/> Roll back</button></div>
-    </div>
-  </details>;
-}
-
-export function ModelSelector({ label, sources, model, onChange }: {
-  label: string; sources: Source[]; model?: ModelRef; onChange: (value: ModelRef | undefined) => void;
-}) {
-  const [models, setModels] = useState<{ modelId: string; status: string }[]>([]);
-  const source = sources.find((entry) => entry.slug === model?.sourceId);
-  useEffect(() => {
-    let current = true;
-    setModels([]);
-    if (source) void api<typeof models>(`/sources/${source.id}/models`).then((records) => { if (current) setModels(records); }).catch(() => undefined);
-    return () => { current = false; };
-  }, [source?.id]);
-  return <fieldset><legend>{label}</legend><div className="model-select">
-    <select aria-label={label + " source"} value={model?.sourceId ?? ""} onChange={(event) => {
-      const sourceId = event.target.value; onChange(sourceId ? { sourceId, modelId: "" } : undefined);
-    }}><option value="">Select source</option>{sources.map((entry) => <option key={entry.id} value={entry.slug}>{entry.slug}</option>)}</select>
-    <select aria-label={label + " model"} disabled={!source} value={model?.modelId ?? ""} onChange={(event) => {
-      if (model) onChange({ ...model, modelId: event.target.value });
-    }}><option value="">Select model</option>
-      {model?.modelId && !models.some((entry) => entry.modelId === model.modelId) && <option>{model.modelId}</option>}
-      {models.map((entry) => <option key={entry.modelId} value={entry.modelId}>{entry.modelId}{entry.status === "removed" ? " (removed)" : ""}</option>)}
-    </select></div></fieldset>;
 }

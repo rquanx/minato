@@ -1,0 +1,17 @@
+services:
+  minato:
+    environment:
+      MINATO_DASHBOARD_ORIGIN: ${MINATO_DASHBOARD_ORIGIN:-http://localhost:18089}
+      MINATO_DASHBOARD_UPSTREAM: http://runtime:4300
+    ports:
+      - "127.0.0.1:${MINATO_DASHBOARD_PUBLIC_PORT:-18089}:4102"
+  runtime:
+    image: minato-runtime:local-dashboard
+    build:
+      target: dashboard
+    environment:
+      LITELLM_GO_MANAGEMENT_API: "true"
+      LITELLM_GO_DASHBOARD_DIR: /dashboard
+      PROXY_BASE_URL: ${MINATO_DASHBOARD_ORIGIN:-http://localhost:18089}
+      UI_USERNAME: ${LITELLM_UI_USERNAME:-admin}
+      UI_PASSWORD: ${LITELLM_UI_PASSWORD:?Set a separate LITELLM_UI_PASSWORD for the Dashboard}

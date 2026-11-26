@@ -13,6 +13,12 @@ export function createAuth(db: Database, pepper: string, password: string, secur
   const sessionDigest = (value: string) => digest(`session:${value}`);
   const cookie = (value: string, lifetime: number) =>
     `minato_session=${value}; Path=/admin/v1; HttpOnly; SameSite=Strict; Max-Age=${lifetime}${secure ? "; Secure" : ""}`;
+  async function sessionMember(sessionDigest: string) {
+    const [record] = await db`select member_id from admin_sessions
+      where digest = ${sessionDigest} and expires_at > now()`;
+    if (!record) throw new ApiError(401, "unauthenticated", "Administrator session expired");
+    return record.member_id as string | null;
+  }
 
   return {
     async login(candidate: string, username?: string) {
@@ -34,11 +40,11 @@ export function createAuth(db: Database, pepper: string, password: string, secur
     async admin(request: FastifyRequest) {
       const session = /(?:^|;\s*)minato_session=([a-f0-9]{64})(?:;|$)/.exec(request.headers.cookie ?? "")?.[1];
       if (!session) throw new ApiError(401, "unauthenticated", "Administrator session required");
-      const [record] = await db`select member_id from admin_sessions
-        where digest = ${sessionDigest(session)} and expires_at > now()`;
-      if (!record) throw new ApiError(401, "unauthenticated", "Administrator session expired");
-      return { session, memberId: record.member_id as string | null, csrfToken: digest(`csrf:${session}`) };
+      const reference = sessionDigest(session);
+      const memberId = await sessionMember(reference);
+      return { session, reference, memberId, csrfToken: digest(`csrf:${session}`) };
     },
+    sessionMember,
     async logout(session: string) {
       await db`delete from admin_sessions where digest = ${sessionDigest(session)}`;
       return cookie("", 0);

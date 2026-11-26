@@ -17,6 +17,8 @@ Minato 是自托管 LLM 控制平面。业务按「项目 → 环境 → 功能�
 
 使用 Docker Compose 启动管理界面和推理入口。管理端默认通过 `http://localhost:8088` 访问。 [安装步骤](docs/self-host.md)
 
-默认部署会在同一目录构建并启动 Go Runtime。Runtime 只保存内存路由快照，Minato 仍负责项目、模型目录、路由版本、审计和用量归因。LiteLLM 兼容模式通过 `compose.litellm.yaml` 单独启用。
+自托管预览版适合用已验收的 CLIProxyAPI 或 OpenCode Go 接入首批业务。Claude、Gemini CLI、Antigravity 和 Kimi Code 的订阅登录已有模拟验收，真实账号的登录、续期和推理验证仍在进行。 [厂商验收记录](docs/provider-compatibility.md)
+
+自托管安装使用 `bun tools/prepare-runtime.ts` 获取固定版本的 Go Runtime，再由 Compose 构建并启动。Runtime 保存内存路由快照，Minato 负责项目、模型目录、路由版本、审计和用量归因。LiteLLM 兼容模式通过 `compose.litellm.yaml` 单独启用。
 
 多副本 Runtime 可以将 `MINATO_RUNTIME_PUBLISH_URLS` 设置为逗号分隔的内部地址。Minato 会把每个路由版本发布到所有节点，推理请求继续通过 `MINATO_RUNTIME_BASE_URL` 访问负载均衡入口。

@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { ApiError, endpoint, modelReference, uuid } from "../../packages/contracts";
+import { ApiError, endpoint, modelReference, uploadEndpoints, uuid } from "../../packages/contracts";
 import { auditCipher } from "../../packages/db/audit";
 import { validateInput } from "../ingress/inference";
 import type { Database } from "./auth";
@@ -22,6 +22,7 @@ export function registerTests(app: FastifyInstance, db: Database, env: NodeJS.Pr
     if (!cipher) throw new ApiError(503, "test_storage_unavailable", "Configure MINATO_AUDIT_SECRET");
     const { id } = idPath.parse(request.params);
     const input = testInput.parse(request.body);
+    if (uploadEndpoints.has(input.endpoint)) throw new ApiError(422, "upload_replay_unavailable", "Upload endpoints are exercised through their inference API");
     const idempotency = z.string().min(8).max(160).parse(request.headers["idempotency-key"]);
     const [feature] = await db`select alias from features where id = ${input.featureId} and environment_id = ${id}`;
     if (!feature) throw new ApiError(404, "feature_not_found", "Feature not found");
@@ -57,8 +58,13 @@ export function registerTests(app: FastifyInstance, db: Database, env: NodeJS.Pr
       created_at as "createdAt", case when expires_at > now() then output_sealed end as output
       from tests where id = ${id}`;
     if (!test) throw new ApiError(404, "test_not_found", "Test not found");
+    const attempts = ["queued", "running"].includes(test.status) ? [] : await db`select
+      a.id, a.source_id as "sourceId", a.model_id as "modelId", a.http_status as status,
+      a.duration_ms as "durationMs", a.retryable, a.error_code as "errorCode", u.total_tokens::text as "totalTokens"
+      from call_attempts a left join attempt_usage u on u.attempt_id = a.id
+      where a.request_id = ${id} order by a.captured_at, a.id`;
     return reply.header("Cache-Control", "no-store").send({
-      ...test, output: test.output && cipher ? JSON.parse(cipher.open(test.output, test.id)) : null,
+      ...test, attempts, output: test.output && cipher ? JSON.parse(cipher.open(test.output, test.id)) : null,
     });
   });
 }

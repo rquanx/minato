@@ -1,20 +1,33 @@
+import type { ProviderKind } from "../../../packages/contracts/providers";
+
 export type Project = { id: string; slug: string; displayName: string };
 export type Environment = Project;
 export type Feature = {
   id: string; alias: string; slug: string; draftRevision: number;
   activeRouteVersion: string | null; desiredRouteVersion: string | null;
-  routingPolicy?: { primary?: ModelRef; fallbacks?: ModelRef[] };
-  declaration: { displayName: string; requirements: { endpoint: string } };
+  unavailable?: boolean; routeReason?: string; desiredRouteState?: string; activeModels?: ModelRef[];
+  routingPolicy?: { primary?: ModelRef; fallbacks?: ModelRef[]; orderedModels?: ModelRef[]; useRegistrationPreference?: boolean };
+  declaration: { displayName: string; preferredModel?: ModelRef; requirements: { endpoint: string } };
 };
 export type ModelRef = { sourceId: string; modelId: string };
 export type Source = {
-  id: string; slug: string; kind: string; enabled: boolean; syncState: string;
-  directoryUrl: string; apiBase: string; defaultEndpoint: string; credentialEnv: string; revision: number;
+  id: string; slug: string; kind: ProviderKind; enabled: boolean; syncState: string;
+  directoryUrl: string; apiBase: string; defaultEndpoint: string; credentialEnv: string | null; revision: number;
   lastSuccessAt: string | null;
+  cpaManagement?: boolean;
+  managedCredential?: boolean;
+  directoryEnabled?: boolean;
+  oauthAvailable?: boolean;
+  credentialType?: "api_key" | "oauth" | "service_account" | null;
+  credentialExpiresAt?: string | null;
+  credentialError?: string | null;
+  accountId?: string | null;
 };
 export type Call = {
   requestId: string; alias: string; kind: string; status: string; captureState: string;
   startedAt: string; durationMs: number | null; totalTokens: string | null;
+  correlationId: string | null; endpoint: string; httpStatus: number | null;
+  attemptCount: number; modelId: string | null; sourceId: string | null;
 };
 
 let csrf = "";

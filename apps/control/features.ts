@@ -27,20 +27,23 @@ export function registerFeatures(app: FastifyInstance, db: Database, auth: Auth)
         declaration = excluded.declaration,
         reconcile_needed = features.reconcile_needed or
           (features.approved_policy is not null and features.declaration is distinct from excluded.declaration)
-      returning alias, registration_revision as "registrationRevision", active_version::text as "activeRouteVersion",
+      returning alias, unavailable, registration_revision as "registrationRevision", active_version::text as "activeRouteVersion",
         (xmax = 0) as inserted`;
-    const { inserted, ...featureView } = row;
+    const { inserted, unavailable, ...featureView } = row;
+    await db`update features f set approved_policy = '{"orderedModels":[]}', reconcile_needed = true
+      from environments e where f.environment_id = e.id and f.alias = ${alias} and e.auto_publish_routes
+      and f.approved_policy is null and f.active_version is null and f.desired_version is null`;
     return reply.code(inserted ? 201 : 200).send({ ...featureView,
-      routingStatus: row.activeRouteVersion ? "active" : "pending" });
+      routingStatus: unavailable ? "unavailable" : row.activeRouteVersion ? "active" : "pending" });
   });
 
   app.get(featurePath, async (request) => {
     const { environment, feature } = await scope(request);
     const [row] = await db`select alias, registration_revision as "registrationRevision",
       declaration->'requirements' as requirements, active_version::text as "activeRouteVersion",
-      desired_version::text as "desiredRouteVersion"
+      desired_version::text as "desiredRouteVersion", unavailable, route_reason as "routeReason"
       from features where environment_id = ${environment} and slug = ${feature}`;
     if (!row) throw new ApiError(404, "feature_not_found", "Feature not found");
-    return { ...row, routingStatus: row.activeRouteVersion ? "active" : "pending" };
+    return { ...row, routingStatus: row.unavailable ? "unavailable" : row.activeRouteVersion ? "active" : "pending" };
   });
 }

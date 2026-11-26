@@ -12,6 +12,33 @@ const keyInput = z.strictObject({
 });
 
 export function registerProjects(app: FastifyInstance, db: Database, auth: Auth) {
+  app.get("/admin/v1/project-archives", async () => ({
+    projects: await db`select slug, display_name as "displayName" from projects where archived_at is not null order by slug`,
+    environments: await db`select p.slug as project, e.slug, e.display_name as "displayName" from environments e
+      join projects p on p.id = e.project_id where e.archived_at is not null order by p.slug, e.slug`,
+  }));
+  const lifecycle = z.strictObject({ displayName: namedResource.shape.displayName.optional(), archived: z.boolean().optional() });
+  app.patch("/admin/v1/projects/:project", async (request) => {
+    const { project } = projectPath.parse(request.params);
+    const input = lifecycle.parse(request.body);
+    const [row] = await db`update projects set display_name = coalesce(${input.displayName ?? null}, display_name),
+      archived_at = case when ${input.archived ?? null}::boolean is true then coalesce(archived_at,now())
+        when ${input.archived ?? null}::boolean is false then null else archived_at end
+      where slug = ${project} returning id, slug, display_name as "displayName", archived_at as "archivedAt"`;
+    if (!row) throw new ApiError(404, "project_not_found", "Project not found");
+    return row;
+  });
+  app.patch("/admin/v1/projects/:project/environments/:env", async (request) => {
+    const { project, env } = environmentPath.parse(request.params);
+    const input = lifecycle.parse(request.body);
+    const [row] = await db`update environments e set display_name = coalesce(${input.displayName ?? null}, e.display_name),
+      archived_at = case when ${input.archived ?? null}::boolean is true then coalesce(e.archived_at,now())
+        when ${input.archived ?? null}::boolean is false then null else e.archived_at end
+      from projects p where p.id = e.project_id and p.slug = ${project} and e.slug = ${env}
+      returning e.id,e.slug,e.display_name as "displayName",e.archived_at as "archivedAt"`;
+    if (!row) throw new ApiError(404, "environment_not_found", "Environment not found");
+    return row;
+  });
   async function environmentId(project: string, env: string) {
     const [row] = await db`select e.id from environments e join projects p on p.id = e.project_id
       where p.slug = ${project} and e.slug = ${env}

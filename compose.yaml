@@ -2,11 +2,12 @@ x-minato: &minato
   image: minato:local
   build: .
   env_file: ${MINATO_ENV_FILE:-.env}
-  environment:
+  environment: &minato-environment
     MINATO_HOST: 0.0.0.0
     MINATO_CALLBACK_HOST: 0.0.0.0
     MINATO_DATA_PLANE: runtime
     MINATO_RUNTIME_BASE_URL: http://runtime:4300
+    MINATO_PROVIDER_RELAY_BASE_URL: http://minato:4100
     MINATO_RUNTIME_TOKEN: ${MINATO_RUNTIME_TOKEN:?Set MINATO_RUNTIME_TOKEN in .env}
     MINATO_RUNTIME_PUBLISH_TOKEN: ${MINATO_RUNTIME_PUBLISH_TOKEN:-${MINATO_RUNTIME_TOKEN}}
   depends_on:
@@ -18,7 +19,7 @@ services:
     image: postgres:17-alpine
     environment:
       POSTGRES_USER: minato
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-}
       POSTGRES_DB: minato
     volumes:
       - pgdata:/var/lib/postgresql/data
@@ -35,12 +36,17 @@ services:
         condition: service_healthy
   minato:
     <<: *minato
+    environment:
+      <<: *minato-environment
+      MINATO_AUDIT_JOURNAL: /var/lib/minato/audit.sqlite
+    volumes:
+      - auditjournal:/var/lib/minato
     ports:
       - "127.0.0.1:${MINATO_PUBLIC_PORT:-8088}:4100"
   runtime:
     image: minato-runtime:local
     build:
-      context: ${MINATO_RUNTIME_BUILD_CONTEXT:-../minato-runtime}
+      context: ${MINATO_RUNTIME_BUILD_CONTEXT:-./.runtime/litellm-go}
       target: runtime
     env_file: ${MINATO_ENV_FILE:-.env}
     environment:
@@ -52,3 +58,4 @@ services:
     restart: unless-stopped
 volumes:
   pgdata:
+  auditjournal:

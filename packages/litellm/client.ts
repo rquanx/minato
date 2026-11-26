@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { endpoint } from "../contracts";
+import { endpoint, endpointPaths, runtimeOnlyEndpoint } from "../contracts";
 
 export const candidate = z.strictObject({
   sourceId: z.string().min(1).max(160),
@@ -8,9 +8,14 @@ export const candidate = z.strictObject({
     const parsed = new URL(url);
     return !parsed.username && !parsed.password && !parsed.search && !parsed.hash;
   }),
-  credentialEnv: z.string().regex(/^MINATO_UPSTREAM_[A-Z][A-Z0-9_]*$/),
+  credentialEnv: z.string().regex(/^MINATO_UPSTREAM_[A-Z][A-Z0-9_]*$/).optional(),
+  credentialId: z.uuid().optional(),
+  credentialVersion: z.number().int().nonnegative().optional(),
+  codex: z.boolean().optional(),
+  subscription: z.enum(["claude", "gemini-cli", "antigravity", "kimi"]).optional(),
+  relativeApiBase: z.boolean().optional(),
   upstreamEndpoint: endpoint,
-});
+}).refine((entry) => entry.credentialId || entry.credentialEnv, "A credential reference is required");
 export type Candidate = z.infer<typeof candidate>;
 
 export function modelGroup(feature: string, version: string, index: number) {
@@ -24,7 +29,9 @@ export function liteLlmConfig(env = process.env) {
   return { base, headers };
 }
 
-export function createLiteLlm(env = process.env) {
+export type CredentialLookup = (source: string, id: string, target: string) => Promise<string>;
+
+export function createLiteLlm(env = process.env, resolveCredential?: CredentialLookup) {
   const { base, headers } = liteLlmConfig(env);
   async function request(path: string, body?: unknown) {
     return fetch(new URL(path, base), {
@@ -45,11 +52,14 @@ export function createLiteLlm(env = process.env) {
   }
   return {
     async stage(group: string, deployment: Candidate) {
+      if (deployment.codex || deployment.subscription) throw new Error("upstream_requires_go_runtime");
+      if (runtimeOnlyEndpoint(deployment.upstreamEndpoint)) throw new Error("endpoint_requires_go_runtime");
       if ((await listIds()).has(group)) return;
-      const key = env[deployment.credentialEnv];
+      const key = deployment.credentialId ? await resolveCredential?.(deployment.sourceId, deployment.credentialId, deployment.apiBase)
+        : deployment.credentialEnv ? env[deployment.credentialEnv] : undefined;
       if (!key) throw new Error("upstream_credential_missing");
       const prefix = deployment.upstreamEndpoint === "chat-completions" ? "openai/chat_completions/" : "openai/";
-      const endpoint = `/v1/${deployment.upstreamEndpoint === "chat-completions" ? "chat/completions" : deployment.upstreamEndpoint}`;
+      const path = endpointPaths[deployment.upstreamEndpoint];
       const response = await request("/model/new", {
         model_name: group,
         litellm_params: {
@@ -57,7 +67,7 @@ export function createLiteLlm(env = process.env) {
           api_base: deployment.apiBase.replace(/\/$/, ""),
           api_key: key,
         },
-        model_info: { id: group, supported_endpoints: [endpoint] },
+        model_info: { id: group, supported_endpoints: [path] },
       });
       await response.body?.cancel();
       if (!(await listIds()).has(group)) throw new Error(response.ok ? "proxy_model_readback_failed" : "proxy_model_create_failed");

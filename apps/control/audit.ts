@@ -5,16 +5,10 @@ import { ApiError, uuid } from "../../packages/contracts";
 import { auditCipher, auditPolicy } from "../../packages/db/audit";
 import { saveUsage } from "../../packages/db/usage";
 import type { Database } from "./auth";
+import { callSearch, searchCalls } from "../../packages/db/call-search";
+import { readUsage, usageRange } from "../../packages/db/usage-report";
 
 const idPath = z.object({ id: uuid });
-const list = z.object({
-  before: z.string().max(300).optional(), limit: z.coerce.number().int().min(1).max(200).default(50),
-  featureId: uuid.optional(), kind: z.enum(["production", "test", "replay"]).optional(),
-  status: z.string().optional(), source: z.string().max(160).optional(), model: z.string().max(256).optional(),
-  from: z.iso.datetime({ offset: true }).optional(), to: z.iso.datetime({ offset: true }).optional(),
-});
-const cursor = z.tuple([z.iso.datetime({ offset: true }), uuid]);
-
 export function registerUsageCallback(app: FastifyInstance, db: Database, env: NodeJS.ProcessEnv) {
   const digest = (value: string) => createHash("sha256").update(value).digest();
   app.post("/internal/v1/litellm/usage", async (request, reply) => {
@@ -54,34 +48,7 @@ export function registerAudit(app: FastifyInstance, db: Database, env: NodeJS.Pr
   });
   app.get("/admin/v1/environments/:id/calls", async (request) => {
     const { id } = idPath.parse(request.params);
-    const input = list.parse(request.query);
-    let position: [string, string] | undefined;
-    if (input.before) {
-      try { position = cursor.parse(JSON.parse(Buffer.from(input.before, "base64url").toString())); }
-      catch { throw new ApiError(422, "invalid_cursor", "Invalid page cursor"); }
-    }
-    const rows = await db`select c.request_id as "requestId", c.status, c.kind,
-      c.capture_state as "captureState", c.started_at as "startedAt", c.duration_ms as "durationMs",
-      to_char(c.started_at at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as "cursorTime",
-      f.alias, (select sum(u.total_tokens)::text from call_attempts a
-        join attempt_usage u on u.attempt_id = a.id where a.request_id = c.request_id) as "totalTokens"
-      from calls c join features f on f.id = c.feature_id
-      where c.environment_id = ${id} and (${input.featureId ?? null}::uuid is null or c.feature_id = ${input.featureId ?? null})
-      and (${input.kind ?? null}::text is null or c.kind = ${input.kind ?? null})
-      and (${input.status ?? null}::text is null or c.status = ${input.status ?? null})
-      and (${input.from ?? null}::timestamptz is null or c.started_at >= ${input.from ?? null})
-      and (${input.to ?? null}::timestamptz is null or c.started_at < ${input.to ?? null})
-      and (${position?.[0] ?? null}::timestamptz is null or
-        (c.started_at, c.request_id) < (${position?.[0] ?? null}::timestamptz, ${position?.[1] ?? null}::uuid))
-      and ((${input.source ?? null}::text is null and ${input.model ?? null}::text is null) or exists (
-        select 1 from call_attempts a where a.request_id = c.request_id
-        and (${input.source ?? null}::text is null or a.source_id = ${input.source ?? null})
-        and (${input.model ?? null}::text is null or a.model_id = ${input.model ?? null})))
-      order by c.started_at desc, c.request_id desc limit ${input.limit + 1}`;
-    const page = rows.slice(0, input.limit);
-    const tail = page.at(-1);
-    return { items: page.map(({ cursorTime: _position, ...row }) => row), before: rows.length > input.limit && tail
-      ? Buffer.from(JSON.stringify([tail.cursorTime, tail.requestId])).toString("base64url") : null };
+    return searchCalls(db, id, callSearch.parse(request.query));
   });
   app.get("/admin/v1/calls/:id", async (request) => {
     const { id } = idPath.parse(request.params);
@@ -116,48 +83,12 @@ export function registerAudit(app: FastifyInstance, db: Database, env: NodeJS.Pr
   });
   app.get("/admin/v1/environments/:id/usage", async (request) => {
     const { id } = idPath.parse(request.params);
-    const range = list.parse(request.query);
-    const [totals] = await db`with period as (
-      select request_id from calls where environment_id = ${id}
-      and started_at >= coalesce(${range.from ?? null}::timestamptz, now() - interval '7 days')
-      and started_at < coalesce(${range.to ?? null}::timestamptz, now())
-      and (${range.featureId ?? null}::uuid is null or feature_id = ${range.featureId ?? null})
-      and (${range.kind ?? null}::text is null or kind = ${range.kind ?? null})
-    )
-    select (select count(*)::int from period) as "requestCount", count(a.id)::int as "attemptCount",
-      count(a.id) filter(where u.total_tokens is null)::int as "unknownAttempts",
-      coalesce(sum(u.total_tokens), 0)::text as "knownTotalTokens",
-      coalesce(sum(u.input_tokens), 0)::text as "inputTokens", coalesce(sum(u.output_tokens), 0)::text as "outputTokens"
-    from period p join call_attempts a on p.request_id = a.request_id left join attempt_usage u on a.id = u.attempt_id`;
-    const [cost] = await db`with period as (
-      select request_id, (started_at at time zone 'UTC')::date as day from calls where environment_id = ${id}
-      and started_at >= coalesce(${range.from ?? null}::timestamptz, now() - interval '7 days')
-      and started_at < coalesce(${range.to ?? null}::timestamptz, now())
-      and (${range.featureId ?? null}::uuid is null or feature_id = ${range.featureId ?? null})
-      and (${range.kind ?? null}::text is null or kind = ${range.kind ?? null})
-    ), priced as (
-      select p.day, u.input_tokens, u.output_tokens,
-        case when coalesce(m.capability_override->>'priceCurrency', 'USD') = 'USD'
-          and (m.capability_override->>'inputPricePerMillion') ~ '^[0-9]+(\\.[0-9]+)?$'
-          then (m.capability_override->>'inputPricePerMillion')::numeric end as input_price,
-        case when coalesce(m.capability_override->>'priceCurrency', 'USD') = 'USD'
-          and (m.capability_override->>'outputPricePerMillion') ~ '^[0-9]+(\\.[0-9]+)?$'
-          then (m.capability_override->>'outputPricePerMillion')::numeric end as output_price
-      from period p join call_attempts a on p.request_id = a.request_id
-      left join attempt_usage u on a.id = u.attempt_id
-      left join sources s on s.slug = a.source_id
-      left join source_models m on m.source_id = s.id and m.raw_model_id = a.model_id
-    ), daily as (
-      select day, count(*) filter (where input_price is not null and output_price is not null
-        and input_tokens is not null and output_tokens is not null)::int as known,
-        sum(input_tokens * input_price / 1000000 + output_tokens * output_price / 1000000) as estimated
-      from priced group by day
-    )
-    select coalesce(sum(known), 0)::int as "costKnownAttempts",
-      coalesce(sum(estimated), 0)::numeric(20,8)::text as "estimatedCostUsd",
-      coalesce(jsonb_agg(jsonb_build_object('date', day, 'costKnownAttempts', known,
-        'estimatedCostUsd', estimated::numeric(20,8)::text) order by day), '[]'::jsonb) as "costTrend"
-    from daily`;
-    return { ...totals, ...cost };
+    return readUsage(db, id, usageRange.parse(request.query));
+  });
+  app.get("/admin/v1/projects/:id/usage", async (request) => {
+    const { id } = idPath.parse(request.params);
+    const [project] = await db`select id from projects where id = ${id} and archived_at is null`;
+    if (!project) throw new ApiError(404, "project_not_found", "Project not found");
+    return readUsage(db, id, usageRange.parse(request.query), { project: true });
   });
 }

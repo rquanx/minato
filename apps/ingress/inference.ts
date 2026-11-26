@@ -1,7 +1,8 @@
 import { z } from "zod";
-import { ApiError, endpoint } from "../../packages/contracts";
-import { candidate, liteLlmConfig, modelGroup } from "../../packages/litellm/client";
-import { createRuntime, runtimeConfig, runtimeRouteKey } from "../../packages/runtime/client";
+import { ApiError, endpoint, endpointPaths, runtimeOnlyEndpoint, uploadEndpoints } from "../../packages/contracts";
+import { candidate, liteLlmConfig, modelGroup, type CredentialLookup } from "../../packages/litellm/client";
+import { createRuntime, runtimeConfig, runtimeFallbackKey, runtimeRouteKey } from "../../packages/runtime/client";
+import { upstreamDescription, upstreamFailure } from "../../packages/contracts/upstream-errors";
 
 const common = ["model", "stream", "temperature", "top_p", "tools", "tool_choice", "parallel_tool_calls", "stop"];
 const allowed = {
@@ -20,6 +21,7 @@ export type Snapshot = z.infer<typeof routeSnapshot>;
 export type Attempt = {
   id: string; modelId: string; sourceId: string; status: number; durationMs: number; retryable: boolean;
   usage?: unknown;
+  errorCode?: string;
 };
 
 export function validateInput(body: unknown, path: Endpoint) {
@@ -29,7 +31,8 @@ export function validateInput(body: unknown, path: Endpoint) {
   if (typeof input.model !== "string" || !input.model) throw new ApiError(400, "model_required", "Model is required");
   if (input.stream !== undefined && typeof input.stream !== "boolean") throw new ApiError(400, "invalid_stream", "Stream must be a boolean");
   for (const key of Object.keys(input)) {
-    if (!allowed[path].has(key)) throw new ApiError(400, "unsupported_parameter", `Unsupported parameter: ${key}`);
+    const fields = allowed[path as keyof typeof allowed];
+    if (fields && !fields.has(key)) throw new ApiError(400, "unsupported_parameter", `Unsupported parameter: ${key}`);
   }
   if (path === "responses" && typeof input.input !== "string" && !Array.isArray(input.input)) {
     throw new ApiError(400, "invalid_input", "Responses input must be text or an array");
@@ -40,28 +43,37 @@ export function validateInput(body: unknown, path: Endpoint) {
   if (path === "embeddings" && input.stream !== undefined) {
     throw new ApiError(400, "unsupported_parameter", "Embeddings does not support streaming");
   }
+  if (path === "anthropic-messages" && (!Array.isArray(input.messages) || !input.messages.length)) {
+    throw new ApiError(400, "invalid_messages", "Messages requires a non-empty messages array");
+  }
+  if (input.stream && ["moderations", "rerank", "ocr", "translation"].includes(path)) {
+    throw new ApiError(400, "streaming_unavailable", "This endpoint does not support SSE streaming");
+  }
   return input as Record<string, unknown> & { model: string; stream?: boolean };
 }
 
-export function createInference(env = process.env) {
-  if (env.MINATO_DATA_PLANE === "runtime") return createRuntimeInference(env);
+export function createInference(env = process.env, resolveCredential?: CredentialLookup) {
+  if (env.MINATO_DATA_PLANE === "runtime") return createRuntimeInference(env, resolveCredential);
   const { base, headers } = liteLlmConfig(env);
   return async function infer(options: {
     snapshot: Snapshot;
     body: ReturnType<typeof validateInput>;
     sessionHeader?: string;
     groupOverride?: string;
+    upload?: FormData;
     signal: AbortSignal;
     onAttempt?: (attempt: Attempt) => void;
     onAttemptStart?: (attempt: { id: string; sourceId: string; modelId: string }) => void;
   }) {
     const { snapshot, body } = options;
-    const path = upstreamPath(snapshot.requirements.endpoint);
+    if (runtimeOnlyEndpoint(snapshot.requirements.endpoint)) throw new ApiError(422, "endpoint_requires_go_runtime", "This endpoint requires the Go Runtime");
+    const path = endpointPaths[snapshot.requirements.endpoint];
     if (body.stream && snapshot.requirements.streaming === false) {
       throw new ApiError(400, "streaming_unavailable", "This feature does not support streaming");
     }
     const deadline = AbortSignal.timeout(120_000);
     let lastStatus = 502;
+    let failure = "upstream_error";
     for (const [i, deployment] of snapshot.candidates.entries()) {
       const more = i + 1 < snapshot.candidates.length;
       const id = crypto.randomUUID();
@@ -83,6 +95,7 @@ export function createInference(env = process.env) {
         });
       } catch {
         lastStatus = connect.signal.aborted || deadline.aborted ? 504 : 502;
+        failure = "upstream_unreachable";
         options.onAttempt?.({ ...details, status: lastStatus, durationMs: performance.now() - start, retryable: !options.signal.aborted });
         if (!more || options.signal.aborted || deadline.aborted) break;
         continue;
@@ -90,6 +103,7 @@ export function createInference(env = process.env) {
         clearTimeout(timer);
       }
       lastStatus = response.status;
+      failure = "upstream_error";
       if (response.ok && body.stream) {
         if (!response.body || !response.headers.get("content-type")?.includes("text/event-stream")) {
           await response.body?.cancel();
@@ -118,25 +132,25 @@ export function createInference(env = process.env) {
         return { status: lastStatus, payload: { ...payload, model: snapshot.alias } };
       }
       if (response.ok) lastStatus = 502;
-      const error = payload?.error as { code?: unknown; type?: unknown } | undefined;
-      const unavailable = error?.code === "model_not_found" || error?.type === "model_not_found";
-      const retryable = lastStatus === 429 || lastStatus >= 500 || unavailable;
-      options.onAttempt?.({ ...details, status: lastStatus, durationMs: performance.now() - start, retryable });
+      failure = upstreamFailure(lastStatus, payload);
+      const retryable = [408, 409, 429].includes(lastStatus) || lastStatus >= 500 ||
+        ["model_unavailable", "model_region_unavailable"].includes(failure);
+      options.onAttempt?.({ ...details, status: lastStatus, durationMs: performance.now() - start, retryable, errorCode: failure });
       if (!retryable || !more || options.signal.aborted || deadline.aborted) break;
     }
-    throw new ApiError(lastStatus, "upstream_error", lastStatus === 400 || lastStatus === 422
-      ? "Upstream rejected the request parameters" : "Upstream request could not be completed");
+    throw new ApiError(lastStatus, failure, upstreamDescription(failure)!);
   };
 }
 
-function createRuntimeInference(env: NodeJS.ProcessEnv) {
+function createRuntimeInference(env: NodeJS.ProcessEnv, resolveCredential?: CredentialLookup) {
   const { base, headers } = runtimeConfig(env);
-  const runtime = createRuntime(env);
+  const runtime = createRuntime(env, resolveCredential);
   return async function infer(options: {
     snapshot: Snapshot;
     body: ReturnType<typeof validateInput>;
     sessionHeader?: string;
     groupOverride?: string;
+    upload?: FormData;
     signal: AbortSignal;
     onAttempt?: (attempt: Attempt) => void;
     onAttemptStart?: (attempt: { id: string; sourceId: string; modelId: string }) => void;
@@ -147,65 +161,100 @@ function createRuntimeInference(env: NodeJS.ProcessEnv) {
     }
     const id = crypto.randomUUID();
     const started = performance.now();
-    const first = snapshot.candidates[0];
-    const modelId = options.groupOverride ?? runtimeRouteKey(snapshot.id, snapshot.version);
+    let first = snapshot.candidates[0];
+    const key = options.groupOverride ?? runtimeRouteKey(snapshot.id, snapshot.version);
     options.onAttemptStart?.({ id, sourceId: first.sourceId, modelId: first.modelId });
-    const attemptHeaders: Record<string, string> = { ...headers, "content-type": "application/json", "x-minato-request-id": id };
+    const attemptHeaders: Record<string, string> = { ...headers, "x-minato-request-id": id };
     if (options.sessionHeader) attemptHeaders["x-opencode-session"] = options.sessionHeader;
-    const path = upstreamPath(snapshot.requirements.endpoint);
+    const endpoint = snapshot.requirements.endpoint;
+    const path = endpointPaths[endpoint];
+    if (!options.upload) attemptHeaders["content-type"] = "application/json";
     const signal = AbortSignal.any([options.signal, AbortSignal.timeout(120_000)]);
-    const send = () => fetch(new URL(path, base), {
-      method: "POST", headers: attemptHeaders, redirect: "error", signal,
-      body: JSON.stringify({ ...body, model: modelId }),
-    });
-    let response: Response;
-    try {
-      response = await send();
-      if (response.status === 404 && response.headers.get("x-minato-runtime-route-missing") === "1") {
-        await response.body?.cancel();
-        await runtime.publish(modelId, options.groupOverride ? "1" : snapshot.version, snapshot.candidates, signal);
-        response = await send();
-      }
-    } catch {
-      options.onAttempt?.({ id, sourceId: first.sourceId, modelId: first.modelId, status: 504, durationMs: performance.now() - started, retryable: !options.signal.aborted });
-      throw new ApiError(504, "upstream_error", "Runtime request could not be completed");
+    async function dispatch(model: string, offset: number) {
+      const send = () => {
+        options.upload?.set("model", model);
+        return fetch(new URL(path, base), {
+          method: "POST", headers: { ...attemptHeaders, "x-minato-request-id": offset ? crypto.randomUUID() : id },
+          redirect: "error", signal, body: options.upload ?? JSON.stringify({ ...body, model }),
+        });
+      };
+      const response = await send();
+      if (response.status !== 404 || response.headers.get("x-minato-runtime-route-missing") !== "1") return response;
+      await response.body?.cancel();
+      await runtime.publish(model, options.groupOverride ? "1" : snapshot.version, snapshot.candidates.slice(offset), signal);
+      return send();
     }
-    const sourceId = response.headers.get("x-minato-runtime-source") || first.sourceId;
-    const actualModelId = response.headers.get("x-minato-runtime-model") || first.modelId;
-    const reportAttempts = () => {
+    function reportAttempts(response: Response, errorCode?: string, retried = false) {
       const encoded = response.headers.get("x-minato-runtime-attempt-log");
       if (!encoded) return false;
       try {
         const attempts = JSON.parse(Buffer.from(encoded, "base64url").toString()) as Array<Record<string, unknown>>;
-        for (const attempt of attempts) {
+        for (const [index, attempt] of attempts.entries()) {
           if (typeof attempt.id !== "string" || typeof attempt.sourceId !== "string" || typeof attempt.modelId !== "string") continue;
+          const last = index === attempts.length - 1;
           options.onAttempt?.({ id: attempt.id, sourceId: attempt.sourceId, modelId: attempt.modelId,
             status: Number(attempt.status) || response.status, durationMs: Number(attempt.durationMs) || 0,
-            retryable: Boolean(attempt.retryable), usage: attempt.usage });
+            retryable: Boolean(attempt.retryable) || (last && retried), usage: attempt.usage,
+            errorCode: last ? errorCode : undefined });
         }
         return attempts.length > 0;
       } catch { return false; }
-    };
+    }
+    let response: Response;
+    let payload: Record<string, unknown> | null = null;
+    let failure = "upstream_error";
+    let offset = 0;
+    try {
+      while (true) {
+        first = snapshot.candidates[offset];
+        response = await dispatch(offset ? runtimeFallbackKey(key, offset) : key, offset);
+        if (response.ok) break;
+        payload = await response.json().catch(() => null) as Record<string, unknown> | null;
+        failure = upstreamFailure(response.status, payload);
+        // Older runtimes stop on this provider-specific 400 even when another model is available.
+        if (failure !== "model_region_unavailable" || options.groupOverride) break;
+        const failed = snapshot.candidates.findIndex((candidate, i) => i >= offset &&
+          candidate.sourceId === response.headers.get("x-minato-runtime-source") &&
+          candidate.modelId === response.headers.get("x-minato-runtime-model"));
+        if (failed < offset || failed + 1 >= snapshot.candidates.length || signal.aborted) break;
+        if (!reportAttempts(response, failure, true)) {
+          options.onAttempt?.({ id: crypto.randomUUID(), sourceId: snapshot.candidates[failed].sourceId,
+            modelId: snapshot.candidates[failed].modelId, status: response.status,
+            durationMs: performance.now() - started, retryable: true, errorCode: failure });
+        }
+        offset = failed + 1;
+      }
+    } catch {
+      options.onAttempt?.({ id: offset ? crypto.randomUUID() : id, sourceId: first.sourceId, modelId: first.modelId,
+        status: 504, durationMs: performance.now() - started, retryable: !options.signal.aborted });
+      throw new ApiError(504, "upstream_unreachable", upstreamDescription("upstream_unreachable")!);
+    }
+    const sourceId = response.headers.get("x-minato-runtime-source") || first.sourceId;
+    const actualModelId = response.headers.get("x-minato-runtime-model") || first.modelId;
+    const attemptId = offset ? crypto.randomUUID() : id;
+    const contentType = response.headers.get("content-type") ?? "";
+    if (response.ok && response.body && (endpoint === "speech" || uploadEndpoints.has(endpoint)) &&
+      !contentType.includes("json") && !contentType.includes("text/event-stream")) {
+      if (!reportAttempts(response)) options.onAttempt?.({ id: attemptId, sourceId, modelId: actualModelId, status: response.status, durationMs: performance.now() - started, retryable: false });
+      return { status: response.status, media: response.body, contentType: contentType || "application/octet-stream" };
+    }
     if (response.ok && body.stream) {
       if (!response.body || !response.headers.get("content-type")?.includes("text/event-stream")) {
         await response.body?.cancel();
-        options.onAttempt?.({ id, sourceId, modelId: actualModelId, status: 502, durationMs: performance.now() - started, retryable: false });
+        options.onAttempt?.({ id: attemptId, sourceId, modelId: actualModelId, status: 502, durationMs: performance.now() - started, retryable: false });
         throw new ApiError(502, "upstream_error", "Runtime returned an invalid stream");
       }
       const stream = await startSse(response.body, snapshot.alias);
-      if (!reportAttempts()) options.onAttempt?.({ id, sourceId, modelId: actualModelId, status: response.status, durationMs: performance.now() - started, retryable: false });
+      if (!reportAttempts(response)) options.onAttempt?.({ id: attemptId, sourceId, modelId: actualModelId, status: response.status, durationMs: performance.now() - started, retryable: false });
       return { status: response.status, stream };
     }
-    const payload = await response.json().catch(() => null) as Record<string, unknown> | null;
-    if (!reportAttempts()) options.onAttempt?.({ id, sourceId, modelId: actualModelId, status: response.status, durationMs: performance.now() - started,
-      retryable: !response.ok && (response.status === 429 || response.status >= 500), usage: payload?.usage });
+    if (response.ok) payload = await response.json().catch(() => null) as Record<string, unknown> | null;
+    if (!reportAttempts(response, response.ok ? undefined : failure)) options.onAttempt?.({ id: attemptId, sourceId, modelId: actualModelId,
+      status: response.status, durationMs: performance.now() - started, retryable: !response.ok && (response.status === 429 || response.status >= 500),
+      usage: payload?.usage, errorCode: response.ok ? undefined : failure });
     if (response.ok && payload) return { status: response.status, payload: { ...payload, model: snapshot.alias } };
-    throw new ApiError(response.status >= 400 ? response.status : 502, "upstream_error", "Runtime request could not be completed");
+    throw new ApiError(response.status >= 400 ? response.status : 502, failure, upstreamDescription(failure)!);
   };
-}
-
-function upstreamPath(endpoint: Endpoint) {
-  return endpoint === "responses" ? "/v1/responses" : endpoint === "chat-completions" ? "/v1/chat/completions" : "/v1/embeddings";
 }
 
 function rewriteEvent(frame: string, alias: string) {
@@ -220,6 +269,9 @@ function rewriteEvent(frame: string, alias: string) {
     if ("model" in event) event.model = alias;
     if (event.response && typeof event.response === "object" && "model" in event.response) {
       (event.response as Record<string, unknown>).model = alias;
+    }
+    if (event.message && typeof event.message === "object" && "model" in event.message) {
+      (event.message as Record<string, unknown>).model = alias;
     }
     return "data: " + JSON.stringify(event);
   }).join("\n");

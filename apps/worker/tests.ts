@@ -7,10 +7,11 @@ import { previewCandidates } from "../../packages/db/routing-policy";
 import type { createLiteLlm } from "../../packages/litellm/client";
 import type { createRuntime } from "../../packages/runtime/client";
 import { testTarget } from "../control/tests";
+import { sourceCredentials } from "../../packages/db/source-credentials";
 
 export function createTestRunner(db: ReturnType<typeof connectDatabase>, proxy: ReturnType<typeof createLiteLlm> | ReturnType<typeof createRuntime>, env = process.env) {
   const cipher = auditCipher(env);
-  const infer = createInference(env);
+  const infer = createInference(env, sourceCredentials(db, env));
   const audit = createAudit(db, env);
   return async function runNextTest() {
     const [test] = await db`update tests t set status = 'running', started_at = now()
@@ -19,6 +20,7 @@ export function createTestRunner(db: ReturnType<typeof connectDatabase>, proxy: 
     if (!test) return false;
     const started = performance.now();
     let record: ReturnType<typeof audit.start> | undefined;
+    let groupOverride: string | undefined;
     try {
       if (!cipher || !test.input_sealed) throw new ApiError(503, "input_unavailable", "Test input unavailable");
       const [feature] = await db`select f.id, f.alias, f.environment_id, f.declaration, f.unavailable,
@@ -36,7 +38,6 @@ export function createTestRunner(db: ReturnType<typeof connectDatabase>, proxy: 
           throw new ApiError(403, "test_permission_revoked", "Environment test permission is required");
         }
       }
-      let groupOverride: string | undefined;
       if (target.mode === "specific_model") {
         if (test.actor && !feature.candidates?.some((item: { sourceId: string; modelId: string }) =>
           item.sourceId === target.sourceId && item.modelId === target.modelId)) {
@@ -61,20 +62,29 @@ export function createTestRunner(db: ReturnType<typeof connectDatabase>, proxy: 
       record = audit.start({ id: test.id, environmentId: test.environment_id, snapshot, endpoint: path,
         body, policy, kind: test.replay_of ? "replay" : "test" });
       let actualModel: string | undefined;
-      const result = await infer({ snapshot, body, groupOverride, signal: AbortSignal.timeout(120_000),
+      await record.started;
+      const result = await infer({ snapshot, body, groupOverride, sessionHeader: test.id, signal: AbortSignal.timeout(120_000),
         onAttempt: (entry) => { actualModel = entry.modelId; record!.record(entry); } });
       if ("stream" in result) throw new Error("Unexpected streaming test response");
-      record.finish("succeeded", result.status, performance.now() - started, null);
-      const output = capture({ response: result.payload, actualModel, durationMs: Math.round(performance.now() - started) }, policy);
+      if ("media" in result && result.media) {
+        for await (const _chunk of result.media) { /* Complete the media response without storing binary content. */ }
+      }
+      await record.finish("succeeded", result.status, performance.now() - started, null);
+      const output = capture({ response: "media" in result ? { contentType: result.contentType } : result.payload,
+        actualModel, durationMs: Math.round(performance.now() - started) }, policy);
       await db`update tests set status = 'succeeded', output_sealed = ${cipher.seal(output.text, test.id)}
         where id = ${test.id}`;
     } catch (error) {
       const code = error instanceof ApiError ? error.code : "test_execution_failed";
       const httpStatus = error instanceof ApiError ? error.status : 502;
       const status = record && (httpStatus === 502 || httpStatus === 504) ? "unknown" : "failed";
-      record?.finish(status, httpStatus, performance.now() - started, null);
+      await record?.finish(status, httpStatus, performance.now() - started, null);
       await db`update tests set status = ${status}, error_code = ${code} where id = ${test.id}`;
     } finally {
+      if (groupOverride && "remove" in proxy) {
+        await proxy.remove(groupOverride).then(() =>
+          db`update tests set runtime_retired_at = now() where id = ${test.id}`).catch(() => undefined);
+      }
       await audit.flush();
     }
     return true;
@@ -87,9 +97,19 @@ export async function cleanExpired(db: ReturnType<typeof connectDatabase>) {
     await tx`update tests set input_sealed = null, output_sealed = null
       where expires_at <= now() and (input_sealed is not null or output_sealed is not null)`;
     await tx`update calls set status = 'unknown' where status = 'started' and started_at < now() - interval '4 minutes'`;
-    await tx`with expired as (delete from call_content where expires_at <= now() returning request_id)
+    await tx`with batch as (select request_id,kind from call_content where expires_at <= now()
+      order by expires_at limit 5000 for update skip locked),
+      expired as (delete from call_content c using batch b where (c.request_id,c.kind) = (b.request_id,b.kind)
+        returning c.request_id)
       update calls set capture_state = 'expired' where request_id in (select request_id from expired)`;
-    await tx`delete from attempt_usage where received_at < now() - interval '90 days'`;
-    await tx`delete from calls where started_at < now() - interval '90 days'`;
+    await tx`with expired as materialized (select request_id from calls where started_at < now() - interval '90 days'
+      order by started_at limit 10000 for update skip locked),
+      usage as (delete from attempt_usage u using call_attempts a, expired e
+        where u.attempt_id = a.id and a.request_id = e.request_id)
+      delete from calls c using expired e where c.request_id = e.request_id`;
+    await tx`delete from attempt_usage where attempt_id in (
+      select u.attempt_id from attempt_usage u where u.received_at < now() - interval '90 days'
+      and not exists (select 1 from call_attempts a where a.id = u.attempt_id) limit 5000)`;
+    await tx`delete from usage_hours where hour < now() - interval '32 days'`;
   });
 }

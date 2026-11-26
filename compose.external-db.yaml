@@ -1,0 +1,10 @@
+services:
+  postgres:
+    profiles: [bundled-postgres]
+  migrate:
+    depends_on: !reset {}
+    environment:
+      DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL for the external PostgreSQL database}
+  minato:
+    environment:
+      DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL for the external PostgreSQL database}

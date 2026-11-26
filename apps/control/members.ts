@@ -47,6 +47,16 @@ export function registerMembers(app: FastifyInstance, db: Database) {
     return reply.code(201).send(record);
   });
   app.get("/admin/v1/members", async () => db`select id, username from members order by username limit 200`);
+  app.delete("/admin/v1/members/:id/sessions", async (request, reply) => {
+    const { id } = params.parse(request.params);
+    await db`delete from admin_sessions where member_id = ${id}`;
+    return reply.code(204).send();
+  });
+  app.get("/admin/v1/environments/:id/members", async (request) => {
+    const { id } = params.parse(request.params);
+    return db`select member_id as id, can_usage as usage, can_content as content, can_test as test
+      from environment_memberships where environment_id = ${id}`;
+  });
   app.put("/admin/v1/environments/:id/members/:member", async (request) => {
     const { id, member } = params.extend({ member: uuid }).parse(request.params);
     const input = z.strictObject({ usage: z.boolean(), content: z.boolean(), test: z.boolean() })

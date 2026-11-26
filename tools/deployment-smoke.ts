@@ -86,9 +86,28 @@ for (let i = 0; i < 60; i++) {
   await Bun.sleep(500);
 }
 const client = new OpenAI({ baseURL: base + "/v1", apiKey: key, maxRetries: 0 });
-const result = await client.responses.create({ model: alias, input: "Synthetic deployment sample." });
+const correlationId = "release-" + crypto.randomUUID();
+const { data: result, response: inference } = await client.responses
+  .create({ model: alias, input: "Synthetic deployment sample." }, { headers: { "x-minato-correlation-id": correlationId } })
+  .withResponse();
 assert.equal(result.model, alias);
 assert.equal(result.usage?.total_tokens, 10);
+const requestId = inference.headers.get("x-request-id");
+assert(requestId);
+for (let i = 0; i < 40; i++) {
+  const { items } = await admin(`/environments/${environment.id}/calls?correlationId=${correlationId}`);
+  const call = items.find((entry: { requestId: string }) => entry.requestId === requestId);
+  if (call?.captureState === "captured") {
+    assert.equal(call.totalTokens, "10");
+    const { content } = await admin("/calls/" + requestId + "/content");
+    assert.deepEqual(content.map((part: { kind: string }) => part.kind).sort(), ["request", "response"]);
+    break;
+  }
+  assert(i < 39, "Captured request not found by correlation ID");
+  await Bun.sleep(250);
+}
+const report = await admin(`/environments/${environment.id}/usage?kind=production`);
+assert.equal(report.knownTotalTokens, "10");
 const blocked = await fetch(base + "/internal/v1/litellm/usage", { method: "POST" });
 assert.equal(blocked.status, 404);
 

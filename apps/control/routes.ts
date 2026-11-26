@@ -16,9 +16,13 @@ const draft = z.union([
 export function registerRoutes(app: FastifyInstance, db: Database) {
   app.get("/admin/v1/environments/:id/features", async (request) => {
     const params = id.parse(request.params);
-    return db`select id, slug, alias, declaration, draft, routing_policy as "routingPolicy", draft_revision as "draftRevision",
-      active_version::text as "activeRouteVersion", desired_version::text as "desiredRouteVersion"
-      from features where environment_id = ${params.id} order by created_at desc limit 200`;
+    return db`select f.id, f.slug, f.alias, f.declaration, f.draft, f.routing_policy as "routingPolicy",
+      f.draft_revision as "draftRevision", f.unavailable, f.route_reason as "routeReason",
+      f.active_version::text as "activeRouteVersion", f.desired_version::text as "desiredRouteVersion",
+      active.candidates as "activeModels", desired.state as "desiredRouteState"
+      from features f left join route_versions active on (active.feature_id, active.version) = (f.id, f.active_version)
+      left join route_versions desired on (desired.feature_id, desired.version) = (f.id, f.desired_version)
+      where f.environment_id = ${params.id} order by f.created_at desc limit 200`;
   });
 
   app.put("/admin/v1/features/:id/routing", async (request) => {
@@ -41,14 +45,19 @@ export function registerRoutes(app: FastifyInstance, db: Database) {
 
   app.post("/admin/v1/features/:id/routing/preview", async (request) => {
     const params = id.parse(request.params);
+    const proposed = request.body === undefined ? undefined : policy.parse(request.body);
     const [feature] = await db`select draft_revision as "draftRevision", draft as candidates, routing_policy,
       declaration, environment_id, registration_revision as "registrationRevision"
       from features where id = ${params.id}`;
     if (!feature) throw new ApiError(404, "feature_not_found", "Feature not found");
-    if (!feature.routing_policy) return { draftRevision: feature.draftRevision, candidates: feature.candidates ?? [], excluded: [] };
+    if (!proposed && !feature.routing_policy) {
+      const candidates = z.array(candidate).parse(feature.candidates ?? []);
+      const attemptOrder = candidates.map(({ sourceId, modelId }) => ({ sourceId, modelId, origin: "feature" }));
+      return { draftRevision: feature.draftRevision, candidates, attemptOrder, excluded: [] };
+    }
     return {
       draftRevision: feature.draftRevision, registrationRevision: feature.registrationRevision,
-      ...await previewCandidates(db, feature, policy.parse(feature.routing_policy)),
+      ...await previewCandidates(db, feature, proposed ?? policy.parse(feature.routing_policy)),
     };
   });
 
@@ -66,9 +75,17 @@ export function registerRoutes(app: FastifyInstance, db: Database) {
 
   app.get("/admin/v1/environments/:id/defaults", async (request) => {
     const { id } = z.object({ id: uuid }).parse(request.params);
-    const [result] = await db`select default_pool as pool from environments where id = ${id}`;
+    const [result] = await db`select default_pool as pool, auto_publish_routes as "autoPublish" from environments where id = ${id}`;
     if (!result) throw new ApiError(404, "environment_not_found", "Environment not found");
     return result;
+  });
+  app.put("/admin/v1/environments/:id/auto-publish", async (request) => {
+    const { id: environment } = id.parse(request.params);
+    const { enabled } = z.strictObject({ enabled: z.boolean() }).parse(request.body);
+    const [row] = await db`update environments set auto_publish_routes = ${enabled}
+      where id = ${environment} and archived_at is null returning auto_publish_routes as "autoPublish"`;
+    if (!row) throw new ApiError(404, "environment_not_found", "Environment not found");
+    return row;
   });
 
   async function enqueue(featureId: string, selection: { revision: number } | { version: string; active: string }) {
@@ -101,6 +118,9 @@ export function registerRoutes(app: FastifyInstance, db: Database) {
         }
       }
       if (!candidates?.length) throw new ApiError(422, "no_candidates", "Set eligible route candidates before publishing");
+      if (requirements.endpoint === "embeddings" && !approvedPolicy && candidates.length > 1) {
+        throw new ApiError(422, "embedding_fallback_requires_policy", "Configure a shared embedding space and dimensions before adding alternate models");
+      }
       const [route] = await tx`insert into route_versions (feature_id, version, candidates, requirements, approved_policy)
         select ${featureId}, coalesce(max(version), 0) + 1, ${JSON.stringify(candidates)}::text::jsonb,
           ${JSON.stringify(requirements)}::text::jsonb, ${approvedPolicy ? JSON.stringify(approvedPolicy) : null}::text::jsonb
@@ -126,7 +146,25 @@ export function registerRoutes(app: FastifyInstance, db: Database) {
 
   app.get("/admin/v1/features/:id/routing/versions", async (request) => {
     const params = id.parse(request.params);
+    const query = z.object({ before: version.optional(), pageSize: z.coerce.number().int().min(1).max(50).optional() }).parse(request.query);
+    if (query.pageSize) {
+      const rows = await db`select version::text as version, state, error_code as "errorCode", created_at as "createdAt"
+        from route_versions where feature_id = ${params.id} and version < coalesce(${query.before ?? null}::bigint, 9223372036854775807)
+        order by route_versions.version desc limit ${query.pageSize + 1}`;
+      const items = rows.slice(0, query.pageSize);
+      return { items, before: rows.length > query.pageSize ? items.at(-1)?.version : null };
+    }
     return db`select version::text as version, state, error_code as "errorCode", created_at as "createdAt"
       from route_versions where feature_id = ${params.id} order by version desc limit 200`;
+  });
+
+  app.get("/admin/v1/features/:id/routing/versions/:version", async (request) => {
+    const params = id.extend({ version }).parse(request.params);
+    const [row] = await db`select r.version::text as version, r.state, r.error_code as "errorCode", r.created_at as "createdAt",
+      r.candidates, r.approved_policy as policy, r.requirements, f.active_version::text as "activeVersion"
+      from route_versions r join features f on f.id = r.feature_id
+      where r.feature_id = ${params.id} and r.version = ${params.version}::bigint`;
+    if (!row) throw new ApiError(404, "route_not_found", "Route version not found");
+    return { ...row, candidates: row.candidates.map(({ sourceId, modelId }: z.infer<typeof candidate>) => ({ sourceId, modelId })) };
   });
 }
