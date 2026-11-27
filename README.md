@@ -1,28 +1,74 @@
 # Minato
 
-Minato 是自托管 LLM 控制平面。业务按「项目 → 环境 → 功能点」接入，用固定别名发请求。管理员可以调整模型和回退策略，按功能点查看用量，并在开启调用审计后查看请求和响应、复制 Prompt、回放测试模型切换。数据平面默认使用独立的低内存 Go Runtime，也保留 LiteLLM 兼容模式。
+Minato is a self-hosted LLM gateway and control plane. Applications use stable model aliases scoped to a project, environment, and feature. Operators can change upstream models and fallback order in the console while applications keep using the same alias.
 
 ```text
-业务应用 → Minato → 数据平面 → 首选模型来源
-                         └→ 备用模型来源
+Application → Minato → Go Runtime → Ordered upstream model candidates
+                ↕
+            PostgreSQL
 ```
 
-- [产品需求](docs/requirements.md)覆盖接入流程、首版范围和验收场景。
-- [技术设计](docs/design.md)覆盖 API、模型目录、路由发布、用量、调用审计与回放。
-- [详细设计](docs/implementation/index.md)定义接口契约、数据表、运行流程和首版验收用例。
-- [MVP 实施计划](docs/roadmap.md)列出开发顺序、里程碑和第一批任务。
-- [MVP Tickets](docs/tickets/README.md)列出各阶段可独立验收的开发任务。
-- [自托管](docs/self-host.md)包含安装、接入和备份恢复方法。
-- [上游兼容性](docs/provider-compatibility.md)记录实测协议和模型 ID 限制。
+## What Minato does
 
-使用 Docker Compose 启动管理界面和推理入口。管理端默认通过 `http://localhost:8088` 访问。 [安装步骤](docs/self-host.md)
+- **Route by feature.** Register a feature, specify its endpoint requirements, and configure an ordered model list. Environment defaults can fill open slots. Preview the resolved order, publish it, and roll back to a previous configuration. The runtime can try the next candidate after an eligible upstream failure.
+- **Manage model sources and credentials.** Sync provider catalogs, add model IDs manually, override model capabilities, and verify models with test requests. Sources include CLIProxyAPI, OpenCode Go and Zen, OpenAI-compatible APIs, Anthropic, Gemini, and Vertex AI. Authentication options depend on the source and include API keys, imported credential files, and provider sign-in. [Provider compatibility](docs/provider-compatibility.md)
+- **Track usage and investigate calls.** View token usage, estimated USD cost, errors, latency, and fallback trends by project or environment. Break usage down by feature, source, or model. Find calls by request ID or application correlation ID, or filter by model, status, and other request attributes.
+- **Inspect and replay requests.** Enable content auditing per environment to retain encrypted request and response content. Inspect individual attempts, copy prompts, and replay a request against a route or a specific model.
+- **Get notified when catalogs change.** Track model additions, removals, and source sync failures through in-app notifications or webhooks. Configure notification channels at the workspace, project, or environment level.
 
-自托管预览版适合用已验收的 CLIProxyAPI 或 OpenCode Go 接入首批业务。Claude、Gemini CLI、Antigravity 和 Kimi Code 的订阅登录已有模拟验收，真实账号的登录、续期和推理验证仍在进行。 [厂商验收记录](docs/provider-compatibility.md)
+The default deployment includes Minato, a pinned Go Runtime for inference, and PostgreSQL. You can reuse an existing PostgreSQL instance. The Go Runtime handles OpenAI-compatible Responses, Chat Completions, and Embeddings, alongside Anthropic Messages and additional endpoints documented in the self-hosting guide. A separate Python LiteLLM compatibility deployment is available for integrations that require it. [Self-hosting guide](docs/self-host.md)
 
-自托管安装使用 `bun tools/prepare-runtime.ts` 获取固定版本的 Go Runtime，再由 Compose 构建并启动。Runtime 保存内存路由快照，Minato 负责项目、模型目录、路由版本、审计和用量归因。LiteLLM 兼容模式通过 `compose.litellm.yaml` 单独启用。
+## Quick start
 
-多副本 Runtime 可以将 `MINATO_RUNTIME_PUBLISH_URLS` 设置为逗号分隔的内部地址。Minato 会把每个路由版本发布到所有节点，推理请求继续通过 `MINATO_RUNTIME_BASE_URL` 访问负载均衡入口。
+You need Bun, Git, and Docker Compose. Clone this repository, copy `.env.compose.example` to `.env`, and set the database password, administrator password, and service secrets. [Environment setup](docs/self-host.md#install)
 
-## 许可证
+```bash
+bun tools/prepare-runtime.ts
+docker compose up -d --build
+curl -fsS http://localhost:8088/health/ready
+```
 
-Minato 采用 MIT 许可证。[LICENSE](LICENSE)
+Open the console at `http://localhost:8088`. Add a model source, create a project and environment, and issue an environment key. For this example, use the project slug `demo-app` and the environment slug `production`. Set `MINATO_ENVIRONMENT_KEY` in your shell and register a Responses feature.
+
+```bash
+curl -fsS -X PUT \
+  http://localhost:8088/minato/v1/projects/demo-app/environments/production/features/classify \
+  -H "Authorization: Bearer ${MINATO_ENVIRONMENT_KEY}" \
+  -H 'Content-Type: application/json' \
+  -d '{"displayName":"Classify text","requirements":{"endpoint":"responses"}}'
+```
+
+In **Projects → Feature routing**, select the feature, configure its model order, and publish the route. Once the route is serving, use the feature alias as the model in your client.
+
+```ts
+import OpenAI from "openai";
+
+const client = new OpenAI({
+  baseURL: "http://localhost:8088/v1",
+  apiKey: process.env.MINATO_ENVIRONMENT_KEY,
+});
+
+const response = await client.responses.create({
+  model: "demo-app.production.classify",
+  input: "Classify this support ticket: I can't sign in.",
+});
+
+console.log(response.output_text);
+```
+
+## Release status
+
+Minato is available as a self-hosted preview. CLIProxyAPI and OpenCode Go have been verified with live upstream requests. Claude, Gemini CLI, Antigravity, and Kimi Code subscription flows have passed simulated checks and are awaiting live-account validation. [Release and compatibility details](docs/provider-compatibility.md)
+
+## Documentation
+
+- [Installation, application setup, and recovery](docs/self-host.md)
+- [Architecture and routing design](docs/design.md)
+- [API and implementation details](docs/implementation/index.md)
+- [Usage and query performance](docs/usage-performance.md)
+- [LiteLLM migration strategy](docs/litellm-migration-strategy.md)
+- [Product requirements](docs/requirements.md) and [roadmap](docs/roadmap.md)
+
+## License
+
+Minato is released under the [MIT License](LICENSE).
