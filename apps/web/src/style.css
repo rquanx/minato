@@ -92,10 +92,9 @@ pre {
 }
 .breadcrumb, .scope, .actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; min-width: 0; }
 .breadcrumb { color: var(--muted); font-size: .9rem; }
-.breadcrumb span:last-child { color: #202636; font-weight: 500; }
+.breadcrumb h1 { margin: 0; color: #202636; font: inherit; font-weight: 500; }
 .scope .select-field { max-width: 240px; }
 .content { max-width: 1520px; padding: 26px clamp(16px, 3vw, 32px) 48px; margin-inline: auto; }
-.content > h1 { margin-bottom: 20px; }
 .toolbar { display: flex; flex-wrap: wrap; align-items: end; gap: var(--space-2); }
 .toolbar > .button:last-child { margin-inline-start: auto; }
 .sections {

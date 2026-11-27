@@ -112,7 +112,7 @@ function App() {
     </aside>
     <main className="workspace">
       <header className="topbar">
-        <div className="breadcrumb"><span>Workspace</span><ChevronRight aria-hidden="true" size={14}/><span>{pages[page].label}</span></div>
+        <div className="breadcrumb"><span>Workspace</span><ChevronRight aria-hidden="true" size={14}/><h1>{pages[page].label}</h1></div>
         {page !== "dashboard" && page !== "sources" && page !== "authentication-files" && <div className="scope">
           <Select label="Project" placeholder="Project" value={projectId} disabled={!projects.length}
             options={projects.map((entry) => ({ value: entry.id, label: entry.displayName }))} onValueChange={(id) => {
@@ -129,7 +129,6 @@ function App() {
         </div>}
       </header>
       <div className="content">
-        <h1>{pages[page].label}</h1>
         {notice && <Notice clear={() => setNotice("")}>{notice}</Notice>}
         {page === "projects" && !memberSession && <Projects key={environmentId} project={project} environment={environment} features={features} sources={sources} refresh={refresh} alert={setNotice}/>}
         {page === "sources" && !memberSession && <Sources records={sources} refresh={refresh} alert={setNotice}/>}
